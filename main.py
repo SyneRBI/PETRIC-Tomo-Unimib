@@ -36,6 +36,8 @@ class Submission (Algorithm):
         self.ybar = acq_model.forward(self.x)
         self.prec = acq_model.backward(data.mult_factors/self.ybar)
         self.prec += 1e-10
+        self.prevGrad = self.x.get_uniform_copy(0)
+        self.prevSDir = self.x.get_uniform_copy(0)
         super().__init__()
         self.configured = True        
 
@@ -110,6 +112,11 @@ class Submission (Algorithm):
 
         # Search direction is gradient divived by preconditioner
         sDir = grad / (self.prec) # 
+        if (self.prevGrad.max()>0):
+            beta = (grad-self.prevGrad).dot(sDir)/self.prevGrad.dot(self.prevSDir)
+            sDir += beta*self.prevSDir
+        self.prevSDir = sDir.clone()
+        self.prevGrad = grad.clone()
 
         ## compute step size
         fpSD = self.lin_model.forward(sDir) #,subset_num=0,num_subsets=42) #*multCorr
