@@ -5,6 +5,7 @@ tmp*/
 err*.txt
 info.txt
 warn*.txt
+.ipynb_checkpoints/
 __pycache__/
 *.s
 *.hs
@@ -13,3 +14,4 @@ __pycache__/
 *.ahv
 *.hv
 *.v
+*.npy
