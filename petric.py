@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath
 from time import time
 
+
+
 import numpy as np
 from skimage.metrics import mean_squared_error as mse
 from tensorboardX import SummaryWriter
@@ -33,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/filt_conj")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -247,7 +249,9 @@ if SRCDIR.is_dir():
                          (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
                           [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
                          (SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
-                          [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
+                          [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")]),
+                          (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
+                          [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")])]
 else:
     log.warning("Source directory does not exist: %s", SRCDIR)
     data_dirs_metrics = [(None, None, [])] # type: ignore
