@@ -26,6 +26,11 @@ class Submission (Algorithm):
     def __init__(self, data, **kwargs):
 
         self.x = data.OSEM_image
+        tImmArr = self.x.as_array()
+        tImmArr = ndi.gaussian_filter(tImmArr,(0.8,0.8,0.8))
+        tempEps = tImmArr.max()*1e-2
+        tImmArr[tImmArr<tempEps]=0
+        self.x.fill(tImmArr)
         epsCorr = data.additive_term.max()*1e-6
  #       data.additive_term += epsCorr
         self.data = data
@@ -39,7 +44,7 @@ class Submission (Algorithm):
         self.prec = acq_model.backward(data.mult_factors/self.ybar)
         
         mask = (self.prec.as_array()<1)
-        mask = ndi.binary_erosion(mask,iterations=2)
+        mask = ndi.binary_dilation(mask,iterations=2)
         mask = 1-mask
         maskSmooth = ndi.gaussian_filter(mask.astype(np.float32),(0,1.1,1.1))
         self.prec += 1e-10
@@ -47,6 +52,7 @@ class Submission (Algorithm):
         self.mask = self.x.get_uniform_copy(0)
         self.mask.fill(mask)
         
+        self.kappaArr = self.data.prior.get_kappa().as_array()
         
         
         self.prevGrad = self.x.get_uniform_copy(0)
@@ -117,8 +123,9 @@ class Submission (Algorithm):
         ssNum = 0
         ssDen = 0
         inpImm_ = self.x.as_array()
+        kappa_ = self.kappaArr
 
-        kappa_ = self.data.prior.get_kappa().as_array()
+        
   #      print(kappa_.shape)
         eps_ = self.data.prior.get_epsilon()
         beta_ = self.data.prior.get_penalisation_factor()
@@ -202,7 +209,7 @@ class Submission (Algorithm):
         stepSize = (ssNum+ssNP)/(ssDen+ssDP)
      #   print('stepSize=' + str(stepSize))
 
-        self.x += (stepSize*sDir)
+        self.x += ((stepSize*sDir)*self.mask)
 
         self.x.maximum(0, out=self.x)
         self.full_model.forward(self.x,out=self.ybar)
