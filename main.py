@@ -170,6 +170,7 @@ class Submission (Algorithm):
         ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
         ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
         sDir.fill(ftS)
+        sDir = sDir/(self.prec.sqrt())
         
         if (self.prevGrad.max()>0):
             beta = (grad-self.prevGrad).dot(sDir)/self.prevGrad.dot(self.prevSDir)
