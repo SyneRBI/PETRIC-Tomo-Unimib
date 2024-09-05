@@ -37,7 +37,18 @@ class Submission (Algorithm):
         self.lin_model = acq_model.get_linear_acquisition_model()
         self.ybar = acq_model.forward(self.x)
         self.prec = acq_model.backward(data.mult_factors/self.ybar)
+        
+        mask = (self.prec.as_array()<1)
+        mask = ndi.binary_erosion(mask,iterations=2)
+        mask = 1-mask
+        maskSmooth = ndi.gaussian_filter(mask.astype(np.float32),(0,1.1,1.1))
         self.prec += 1e-10
+        self.prec = self.prec.sqrt()
+        self.mask = self.x.get_uniform_copy(0)
+        self.mask.fill(mask)
+        
+        
+        
         self.prevGrad = self.x.get_uniform_copy(0)
         self.prevSDir = self.x.get_uniform_copy(0)
         self.makeFFT_2D_filter()
@@ -164,13 +175,17 @@ class Submission (Algorithm):
 
         # Search direction is gradient divived by preconditioner
         #sDir = grad / (self.prec) # 
-        sDir = grad/(self.prec.sqrt())
+        #sDir = grad/(self.prec.sqrt())
+        sDir = grad/self.prec
+     #   sDir *= self.mask
         ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
         ftS *= self.FFTFilter
         ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
         ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
         sDir.fill(ftS)
-        sDir = sDir/(self.prec.sqrt())
+        sDir /= self.prec
+        sDir *= self.mask
+        #sDir = sDir/(self.prec.sqrt())
         
         if (self.prevGrad.max()>0):
             beta = (grad-self.prevGrad).dot(sDir)/self.prevGrad.dot(self.prevSDir)
