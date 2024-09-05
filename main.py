@@ -27,7 +27,7 @@ class Submission (Algorithm):
 
         self.x = data.OSEM_image
         tImmArr = self.x.as_array()
-        tImmArr = ndi.gaussian_filter(tImmArr,(0.8,0.8,0.8))
+        tImmArr = ndi.gaussian_filter(tImmArr,(0.2,0.2,0.2))
         tempEps = tImmArr.max()*1e-2
         tImmArr[tImmArr<tempEps]=0
         self.x.fill(tImmArr)
