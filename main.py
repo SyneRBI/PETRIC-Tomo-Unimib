@@ -44,13 +44,15 @@ class Submission (Algorithm):
         self.prec = acq_model.backward(data.mult_factors/self.ybar)
         
         mask = (self.prec.as_array()<1)
+        masko = (1- mask.copy())
         mask = ndi.binary_dilation(mask,iterations=2)
         mask = 1-mask
         maskSmooth = ndi.gaussian_filter(mask.astype(np.float32),(0,1.1,1.1))
         self.prec += 1e-10
-        self.prec = self.prec.sqrt()
+        self.prec.fill(1/np.sqrt(self.prec.as_array()))
+     #   print('\n\n there are ' + str(np.max(np.isnan(self.prec.as_array()))) + ' NaNs in the prec')
         self.mask = self.x.get_uniform_copy(0)
-        self.mask.fill(mask)
+        self.mask.fill(masko)
         
         self.kappaArr = self.data.prior.get_kappa().as_array()
         
@@ -179,19 +181,23 @@ class Submission (Algorithm):
         # Compute gradient of penalty
         pGrad = self.data.prior.gradient(self.x)
         grad = gradI - pGrad
+        grad.write('grad.hv')
 
         # Search direction is gradient divived by preconditioner
         #sDir = grad / (self.prec) # 
         #sDir = grad/(self.prec.sqrt())
-        sDir = grad/self.prec
+        self.prec.write('prec.hv')
+        sDir = grad*self.prec
+        sDir.write('first_mult.hv')
      #   sDir *= self.mask
         ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
         ftS *= self.FFTFilter
         ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
         ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
         sDir.fill(ftS)
-        sDir /= self.prec
-        sDir *= self.mask
+        sDir *= self.prec
+        
+        #sDir *= self.mask
         #sDir = sDir/(self.prec.sqrt())
         
         if (self.prevGrad.max()>0):
@@ -207,9 +213,11 @@ class Submission (Algorithm):
         ssNP, ssDP = self.rdp_step_size(sDir.as_array())
 
         stepSize = (ssNum+ssNP)/(ssDen+ssDP)
+        sDir *= stepSize
+        sDir.write('sDir.hv')
      #   print('stepSize=' + str(stepSize))
 
-        self.x += ((stepSize*sDir)*self.mask)
+        self.x += (sDir) #*self.mask)
 
         self.x.maximum(0, out=self.x)
         self.full_model.forward(self.x,out=self.ybar)
