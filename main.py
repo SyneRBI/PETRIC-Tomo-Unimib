@@ -2,6 +2,8 @@ from cil.optimisation.algorithms import Algorithm
 from cil.optimisation.utilities import callbacks
 import sirf.STIR as STIR
 import numpy as np
+import scipy.ndimage as ndi
+import re
 
 class MaxIteration(callbacks.Callback):
     """
@@ -38,15 +40,65 @@ class Submission (Algorithm):
         self.prec += 1e-10
         self.prevGrad = self.x.get_uniform_copy(0)
         self.prevSDir = self.x.get_uniform_copy(0)
+        self.makeFFT_2D_filter()
         super().__init__()
         self.configured = True        
 
-    def test_step (self):
-        tImm = self.x.as_array()
-        print(type(tImm))
-        print(tImm.shape)
-        rolled = np.roll(tImm,(-1,1,1),axis=(0,1,2))   
-        print ('done test')        
+    def makeFFT_2D_filter (self):
+        d_ = .65
+        imShape_ = self.x.shape
+        tRes_ = 0
+        # find TOF res
+        dataInfo = self.data.acquired_data.get_info().splitlines()
+        tofLine = [line for line in dataInfo if 'TOF timing' in line]
+        if len(tofLine)>0:
+            regExpMatch = re.search(r':=\s*(\d+)', tofLine[0])
+            tRes_ = float(regExpMatch.group(1))
+        pixS_ = self.x.voxel_sizes()[1]
+        
+        order = np.power(2,np.ceil(np.log2(imShape_[1]))).astype(np.uint32)
+       # freqN = np.power(2,np.ceil(np.log2(imShape_[1]//2))).astype(np.uint32)
+        print (order)
+        freqN = order//2
+        nFreq = np.arange(0,freqN +1)
+        filtImpResp = np.zeros((len(nFreq),))
+        filtImpResp[0]=1/4
+        filtImpResp[1::2]=-1/((np.pi*nFreq[1::2])**2)
+
+        #TOF part
+        if (tRes_ > 0):
+            xV_ = nFreq*pixS_
+            tRes_ = tRes_*0.15/2.35 # 300 mm /ns --> .3 mm/ps --> /2 because 2 photons 
+            tKern_ = np.exp(-(xV_**2/(4*tRes_**2)))
+            filtImpResp *=tKern_
+
+        # Once the filter has been defined in image space, convert it to Fourier space
+        filtImpResp = np.concatenate([filtImpResp,filtImpResp[-2:0:-1]])
+        ftFilt = 2 * np.real(np.fft.fft(filtImpResp)) # check! when implemented correctly the imag part is zero within numerical precision
+        ftFilt = ftFilt[:(freqN+1)]
+        
+        # Apply the shepp-logan window
+        fV = 2*np.pi*(np.arange(1,freqN+1))/imShape_[1]
+        ftFilt[1:] *= (np.sin(fV/(2*d_)) / (fV/(2*d_)))
+        ftFilt[ftFilt<0]=0
+
+        # interpolate to 2D
+        xf = np.arange(0,imShape_[1]//2+1).reshape((1,imShape_[1]//2+1))
+        yf = xf.transpose()
+        freqR = np.sqrt(xf**2+yf**2)
+        interpF = np.interp(freqR,nFreq,ftFilt,right=0)
+        if (imShape_[1]%2):
+            interpF = np.concatenate([interpF,interpF[-1:0:-1,:]],axis=0)
+            interpF = np.concatenate([interpF,interpF[:,-1:0:-1]],axis=1)
+            interpF = interpF.reshape((1,)+imShape_[1:])            
+        else:
+            interpF = np.concatenate([interpF,interpF[-2:0:-1,:]],axis=0)
+            interpF = np.concatenate([interpF,interpF[:,-2:0:-1]],axis=1)
+            interpF = interpF.reshape((1,)+imShape_[1:])
+        self.FFTFilter = interpF
+ 
+    
+   
     
     def rdp_step_size (self,sDir_):
         
@@ -111,7 +163,14 @@ class Submission (Algorithm):
         grad = gradI - pGrad
 
         # Search direction is gradient divived by preconditioner
-        sDir = grad / (self.prec) # 
+        #sDir = grad / (self.prec) # 
+        sDir = grad/(self.prec.sqrt())
+        ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
+        ftS *= self.FFTFilter
+        ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
+        ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
+        sDir.fill(ftS)
+        
         if (self.prevGrad.max()>0):
             beta = (grad-self.prevGrad).dot(sDir)/self.prevGrad.dot(self.prevSDir)
             sDir += beta*self.prevSDir
