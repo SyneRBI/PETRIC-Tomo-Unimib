@@ -4,6 +4,7 @@ import sirf.STIR as STIR
 import numpy as np
 import scipy.ndimage as ndi
 import re
+import time
 
 class MaxIteration(callbacks.Callback):
     """
@@ -30,13 +31,13 @@ class Submission (Algorithm):
         tImmArr = ndi.gaussian_filter(tImmArr,(0.2,0.2,0.2))
         tempEps = tImmArr.max()*1e-2
         tImmArr[tImmArr<tempEps]=0
-        self.x.fill(tImmArr)
+        # self.x.fill(tImmArr)
         epsCorr = data.additive_term.max()*1e-6
- #       data.additive_term += epsCorr
+        data.additive_term+=epsCorr
         self.data = data
         acq_model = STIR.AcquisitionModelUsingParallelproj()
         acq_model.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors))
-        acq_model.set_additive_term(data.additive_term+epsCorr)
+        acq_model.set_additive_term(data.additive_term)
         acq_model.set_up(data.acquired_data, self.x)
         self.full_model = acq_model
         self.lin_model = acq_model.get_linear_acquisition_model()
@@ -48,8 +49,9 @@ class Submission (Algorithm):
         mask = ndi.binary_dilation(mask,iterations=2)
         mask = 1-mask
         maskSmooth = ndi.gaussian_filter(mask.astype(np.float32),(0,1.1,1.1))
-        self.prec += 1e-10
-        self.prec.fill(1/np.sqrt(self.prec.as_array()))
+        self.prec += 1e-1
+        self.prec.fill(masko/(self.prec.as_array()))
+        self.prec
      #   print('\n\n there are ' + str(np.max(np.isnan(self.prec.as_array()))) + ' NaNs in the prec')
         self.mask = self.x.get_uniform_copy(0)
         self.mask.fill(masko)
@@ -61,7 +63,33 @@ class Submission (Algorithm):
         self.prevSDir = self.x.get_uniform_copy(0)
         self.makeFFT_2D_filter()
         super().__init__()
-        self.configured = True        
+        self.configured = True       
+    
+    def rdp_grad (self):
+        inpImm_ = self.x.as_array()
+        kappa_ = self.kappaArr
+        rdpG_ = np.zeros_like(inpImm_)
+        eps_ = self.data.prior.get_epsilon()
+        beta_ = self.data.prior.get_penalisation_factor()
+        pixS_ = self.x.voxel_sizes()        
+        for xs in range(-1,2):
+            for ys in range (-1,2):
+                for zs in range(-1,2):
+                    if (xs == 0) and (ys==0) and (zs==0): 
+              #          print('continuing')
+                        continue
+                    shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))
+                    sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
+                    if zs==-1:
+                        shiftImm_[-1,:,:]= inpImm_[-1,:,:]
+                    if zs==1:
+                        shiftImm_[0,:,:] = inpImm_[0,:,:]
+
+                    tempW = pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)             
+                    rdpG_ += tempW*(inpImm_ - shiftImm_)*(inpImm_ + 3 * shiftImm_ + 2* eps_ + 2* np.abs(inpImm_-shiftImm_)) /(np.abs(inpImm_)+ np.abs(shiftImm_) + 2*np.abs(inpImm_-shiftImm_ )+eps_)** 2 
+                    
+        rdpG_ *= beta_
+        return rdpG_        
 
     def makeFFT_2D_filter (self):
         d_ = .65
@@ -77,7 +105,7 @@ class Submission (Algorithm):
         
         order = np.power(2,np.ceil(np.log2(imShape_[1]))).astype(np.uint32)
        # freqN = np.power(2,np.ceil(np.log2(imShape_[1]//2))).astype(np.uint32)
-        print (order)
+      #  print (order)
         freqN = order//2
         nFreq = np.arange(0,freqN +1)
         filtImpResp = np.zeros((len(nFreq),))
@@ -176,26 +204,33 @@ class Submission (Algorithm):
     
     def update(self):
    #     self.test_step()
-        gradSino = self.data.acquired_data/self.ybar - 1
+        yDen = self.ybar.copy()
+        yDen.maximum(self.data.additive_term,out=yDen)   
+        gradSino = (self.data.acquired_data-self.ybar)/yDen 
+    #    gradSino = self.data.acquired_data/self.ybar - 1
         gradI = self.full_model.backward(gradSino) 
+   #     print('NaNs in the tomo gradient:' + str(np.max(np.isnan(gradI.as_array()))))
         # Compute gradient of penalty
-        pGrad = self.data.prior.gradient(self.x)
+        #pGrad = self.data.prior.gradient(self.x)
+        pGrad = gradI.get_uniform_copy(0)
+        pGrad.fill(self.rdp_grad())
         grad = gradI - pGrad
-        grad.write('grad.hv')
+        
+     #   grad.write('grad.hv')
 
         # Search direction is gradient divived by preconditioner
         #sDir = grad / (self.prec) # 
         #sDir = grad/(self.prec.sqrt())
-        self.prec.write('prec.hv')
+       # self.prec.write('prec.hv')
         sDir = grad*self.prec
-        sDir.write('first_mult.hv')
+      #  sDir.write('first_mult.hv')
      #   sDir *= self.mask
-        ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
-        ftS *= self.FFTFilter
-        ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
-        ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
-        sDir.fill(ftS)
-        sDir *= self.prec
+     #   ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
+     #   ftS *= self.FFTFilter
+      #  ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
+     #   ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
+     #   sDir.fill(ftS)
+        #sDir *= self.prec
         
         #sDir *= self.mask
         #sDir = sDir/(self.prec.sqrt())
@@ -209,18 +244,30 @@ class Submission (Algorithm):
         ## compute step size
         fpSD = self.lin_model.forward(sDir) #,subset_num=0,num_subsets=42) #*multCorr
         ssNum = sDir.dot(gradI)
-        ssDen = fpSD.dot((fpSD/self.ybar)) #*42
+
+        ssDen = fpSD.dot((fpSD/yDen)) #*42
         ssNP, ssDP = self.rdp_step_size(sDir.as_array())
+        ssString = 'tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}'
+        #print(ssString.format(ssNum,ssDen,ssNP,ssDP))
 
         stepSize = (ssNum+ssNP)/(ssDen+ssDP)
-        sDir *= stepSize
-        sDir.write('sDir.hv')
+     #   ts = time.time()
+        
+     #   print('mult imm took ' + str(time.time()-ts))
+     #   sDir.write('sDir.hv')
      #   print('stepSize=' + str(stepSize))
 
-        self.x += (sDir) #*self.mask)
+        self.x = self.x.sapyb(1,sDir,stepSize) #    += (sDir) #*self.mask)
+        self.ybar = self.ybar.sapyb(1,fpSD,stepSize)
+        #ts = time.time()
+     #   fpSD *= stepSize
+     #   print('mult sino took ' + str(time.time()-ts))
+      #  ts = time.time()
+       # self.ybar += (fpSD)
+      #  print('adding sino took ' + str(time.time()-ts))
 
-        self.x.maximum(0, out=self.x)
-        self.full_model.forward(self.x,out=self.ybar)
+        # self.x.maximum(0, out=self.x)
+        # self.full_model.forward(self.x,out=self.ybar)
         
     def update_objective(self):
         return 0
