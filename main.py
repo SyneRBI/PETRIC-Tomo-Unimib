@@ -196,8 +196,8 @@ class Submission (Algorithm):
                     wI *= pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)
                     ssNum -= np.matmul((inpImm_-shiftImm_).flatten().T,((sDir_-shiftSI_)*wI).flat)
                     ssDen += np.matmul((shiftSI_-sDir_).flatten().T,((shiftSI_-sDir_)*wI).flat)
-        ssNum *= (beta_*2)
-        ssDen *= (beta_*2)
+        ssNum *= (beta_)
+        ssDen *= (beta_)
      #   print('done RDP ss')
         return ssNum,ssDen
 
