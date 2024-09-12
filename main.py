@@ -92,10 +92,10 @@ class Submission (Algorithm):
                         shiftSI_[0,:,:] = sDir_[0,:,:]
                     wI = 1/(np.abs(inpImm_)+ np.abs(shiftImm_) + alpha_ * (sDir_ + shiftSI_) + 2 * np.abs(inpImm_-shiftImm_+ alpha_ * (sDir_ - shiftSI_)) + eps_)
                     wI *= pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)
-                    ssNum -= np.matmul((inpImm_-shiftImm_).flatten().T,((sDir_-shiftSI_)*wI).flat)
-                    ssDen += np.matmul((shiftSI_-sDir_).flatten().T,((shiftSI_-sDir_)*wI).flat)
-        ssNum *= (beta_*2)
-        ssDen *= (beta_*2)
+                    ssNum -= np.dot((inpImm_-shiftImm_).flat,((sDir_-shiftSI_)*wI).flat)
+                    ssDen += np.dot((shiftSI_-sDir_).flat,((shiftSI_-sDir_)*wI).flat)
+        ssNum *= beta_
+        ssDen *= beta_
      #   print('done RDP ss')
         return ssNum,ssDen
 
@@ -129,4 +129,4 @@ class Submission (Algorithm):
         return 0
         
          #   ssTomo = ssNum/ssDen
-submission_callbacks = [MaxIteration(660)]
+submission_callbacks = [MaxIteration(50)]
