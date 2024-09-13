@@ -41,23 +41,33 @@ class Submission (Algorithm):
         acq_model.set_up(data.acquired_data, self.x)
         self.full_model = acq_model
         self.lin_model = acq_model.get_linear_acquisition_model()
+        self.kappaArr = self.data.prior.get_kappa().as_array()
         self.ybar = acq_model.forward(self.x)
+        self.prec = self.x.get_uniform_copy(0)
         self.prec = acq_model.backward(data.mult_factors/self.ybar)
         
-        mask = (self.prec.as_array()<1)
-        masko = (1- mask.copy())
-        mask = ndi.binary_dilation(mask,iterations=2)
-        mask = 1-mask
-        maskSmooth = ndi.gaussian_filter(mask.astype(np.float32),(0,1.1,1.1))
-        self.prec += 1e-1
-        self.prec.fill(masko/(self.prec.as_array()))
-        self.prec
+        precArr = self.prec.as_array()
+        #precArr = self.kappaArr.copy()
+        precArr += self.rdp_hess_diag()
+        mask = (precArr>1)
+        structuring_element = np.array([[0, 1, 0],
+                          [1, 1, 1],
+                          [0, 1, 0]]).astype(bool)
+        structuring_element = structuring_element.reshape((-1,3,3))                 
+        precDil = precArr.copy()                        
+        for _ in range(15):
+            precDil = ndi.grey_dilation(precDil,structure=structuring_element)
+            precDil[mask] = precArr[mask]
+        
+
+        precDil += 1e-5
+        self.prec.fill(np.sqrt(1/precDil))
+       # self.prec.fill((1/precDil))
+        self.prec.write('prec.hv')
+        #self.prec
      #   print('\n\n there are ' + str(np.max(np.isnan(self.prec.as_array()))) + ' NaNs in the prec')
         self.mask = self.x.get_uniform_copy(0)
-        self.mask.fill(masko)
-        
-        self.kappaArr = self.data.prior.get_kappa().as_array()
-        
+        self.mask.fill(mask)
         
         self.prevGrad = self.x.get_uniform_copy(0)
         self.prevSDir = self.x.get_uniform_copy(0)
@@ -145,8 +155,33 @@ class Submission (Algorithm):
         self.FFTFilter = interpF
  
     
-   
-    
+    def rdp_hess_diag (self):
+        inpImm_ = self.x.as_array()
+        kappa_ = self.kappaArr
+        rdpG_ = np.zeros_like(inpImm_)
+        eps_ = self.data.prior.get_epsilon()
+        beta_ = self.data.prior.get_penalisation_factor()
+        pixS_ = self.x.voxel_sizes()        
+        for xs in range(-1,2):
+            for ys in range (-1,2):
+                for zs in range(-1,2):
+                    if (xs == 0) and (ys==0) and (zs==0): 
+              #          print('continuing')
+                        continue
+                    shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))
+                    sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
+                    if zs==-1:
+                        shiftImm_[-1,:,:]= inpImm_[-1,:,:]
+                    if zs==1:
+                        shiftImm_[0,:,:] = inpImm_[0,:,:]
+
+                    tempW = pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)             
+                    rdpG_ += 4*tempW*(eps_ +2 * shiftImm_)**2 /(inpImm_+ shiftImm_ + 2*np.abs(inpImm_-shiftImm_ )+eps_)** 3 
+                    
+        rdpG_ *= beta_
+        return rdpG_
+
+        
     def rdp_step_size (self,sDir_):
         
   #      print('\n RDP Step size' + str(sDir_.shape))
@@ -208,7 +243,9 @@ class Submission (Algorithm):
         yDen.maximum(self.data.additive_term,out=yDen)   
         gradSino = (self.data.acquired_data-self.ybar)/yDen 
     #    gradSino = self.data.acquired_data/self.ybar - 1
+     #   ts = time.time()
         gradI = self.full_model.backward(gradSino) 
+    #    print ('BP took' + str(time.time()-ts))
    #     print('NaNs in the tomo gradient:' + str(np.max(np.isnan(gradI.as_array()))))
         # Compute gradient of penalty
         #pGrad = self.data.prior.gradient(self.x)
@@ -226,28 +263,32 @@ class Submission (Algorithm):
       #  sDir.write('first_mult.hv')
      #   sDir *= self.mask
      #   ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
-     #   ftS *= self.FFTFilter
-      #  ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
-     #   ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
-     #   sDir.fill(ftS)
-        #sDir *= self.prec
+    #    ftS *= self.FFTFilter
+    #    ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
+    #    ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
+    #    sDir.fill(ftS)
+        sDir *= self.prec
         
         #sDir *= self.mask
         #sDir = sDir/(self.prec.sqrt())
         
         if (self.prevGrad.max()>0):
             beta = (grad-self.prevGrad).dot(sDir)/self.prevGrad.dot(self.prevSDir)
+            beta = max(0,beta)
             sDir += beta*self.prevSDir
         self.prevSDir = sDir.clone()
         self.prevGrad = grad.clone()
 
         ## compute step size
+      #  ts = time.time()
         fpSD = self.lin_model.forward(sDir) #,subset_num=0,num_subsets=42) #*multCorr
+       # print ('FPSD took' + str(time.time()-ts))
         ssNum = sDir.dot(gradI)
 
-        ssDen = fpSD.dot((fpSD/yDen)) #*42
+    #    ssDen = fpSD.dot((fpSD/yDen)) #*42
+        ssDen = fpSD.dot((fpSD/self.ybar)) #*42
         ssNP, ssDP = self.rdp_step_size(sDir.as_array())
-        ssString = 'tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}'
+        #ssString = 'tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}'
         #print(ssString.format(ssNum,ssDen,ssNP,ssDP))
 
         stepSize = (ssNum+ssNP)/(ssDen+ssDP)
@@ -257,14 +298,17 @@ class Submission (Algorithm):
      #   sDir.write('sDir.hv')
      #   print('stepSize=' + str(stepSize))
 
-        self.x = self.x.sapyb(1,sDir,stepSize) #    += (sDir) #*self.mask)
-        self.ybar = self.ybar.sapyb(1,fpSD,stepSize)
-        #ts = time.time()
-     #   fpSD *= stepSize
-     #   print('mult sino took ' + str(time.time()-ts))
-      #  ts = time.time()
-       # self.ybar += (fpSD)
-      #  print('adding sino took ' + str(time.time()-ts))
+        self.x.sapyb(1,sDir,stepSize,out=self.x) #    += (sDir) #*self.mask)
+        # ts = time.time()
+        self.ybar.sapyb(1,fpSD,stepSize,out=self.ybar)
+        # print ('sapyb of ybar took' + str(time.time()-ts))
+        
+        # ts = time.time()
+        #fpSD *= stepSize
+        # print('mult sino took ' + str(time.time()-ts))
+        # ts = time.time()
+        #self.ybar += (fpSD)
+        # print('adding sino took ' + str(time.time()-ts))
 
         # self.x.maximum(0, out=self.x)
         # self.full_model.forward(self.x,out=self.ybar)
