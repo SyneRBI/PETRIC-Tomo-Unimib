@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/conjNeg_newDiagFilt_2")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/conjPos_newDiagFilt_2")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -244,12 +244,12 @@ def get_data(srcdir=".", outdir=OUTDIR, sirf_verbosity=0):
 if SRCDIR.is_dir():
     # create list of existing data
     # NB: `MetricsWithTimeout` initialises `SaveIters` which creates `outdir`
-    data_dirs_metrics = [(SRCDIR / "Siemens_mMR_NEMA_IQ", OUTDIR / "mMR_NEMA",
-                           [MetricsWithTimeout(outdir=OUTDIR / "mMR_NEMA", transverse_slice=72, coronal_slice=109)]),
-                          (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
-                           [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
-                           (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
-                         [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
+    data_dirs_metrics = [#(SRCDIR / "Siemens_mMR_NEMA_IQ", OUTDIR / "mMR_NEMA",
+                          # [MetricsWithTimeout(outdir=OUTDIR / "mMR_NEMA", transverse_slice=72, coronal_slice=109)]),
+                          #(SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
+                          # [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
+                          # (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
+                         #[MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
                           (SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
                            [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
 else:

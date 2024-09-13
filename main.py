@@ -239,10 +239,10 @@ class Submission (Algorithm):
     
     def update(self):
    #     self.test_step()
-        yDen = self.ybar.copy()
-        yDen.maximum(self.data.additive_term,out=yDen)   
-        gradSino = (self.data.acquired_data-self.ybar)/yDen 
-    #    gradSino = self.data.acquired_data/self.ybar - 1
+   #     yDen = self.ybar.copy()
+   #     yDen.maximum(self.data.additive_term,out=yDen)   
+   #     gradSino = (self.data.acquired_data-self.ybar)/yDen 
+        gradSino = self.data.acquired_data/self.ybar - 1
      #   ts = time.time()
         gradI = self.full_model.backward(gradSino) 
     #    print ('BP took' + str(time.time()-ts))
@@ -285,8 +285,8 @@ class Submission (Algorithm):
        # print ('FPSD took' + str(time.time()-ts))
         ssNum = sDir.dot(gradI)
 
-        ssDen = fpSD.dot((fpSD/yDen)) #*42
-    #    ssDen = fpSD.dot((fpSD/self.ybar)) #*42
+    #    ssDen = fpSD.dot((fpSD/yDen)) #*42
+        ssDen = fpSD.dot((fpSD/self.ybar)) #*42
         ssNP, ssDP = self.rdp_step_size(sDir.as_array())
         #ssString = 'tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}'
         #print(ssString.format(ssNum,ssDen,ssNP,ssDP))
@@ -300,7 +300,7 @@ class Submission (Algorithm):
 
         self.x.sapyb(1,sDir,stepSize,out=self.x) #    += (sDir) #*self.mask)
         # ts = time.time()
-        self.ybar.sapyb(1,fpSD,stepSize,out=self.ybar)
+        #self.ybar.sapyb(1,fpSD,stepSize,out=self.ybar)
         # print ('sapyb of ybar took' + str(time.time()-ts))
         
         # ts = time.time()
@@ -310,8 +310,8 @@ class Submission (Algorithm):
         #self.ybar += (fpSD)
         # print('adding sino took ' + str(time.time()-ts))
 
-        # self.x.maximum(0, out=self.x)
-        # self.full_model.forward(self.x,out=self.ybar)
+        self.x.maximum(0, out=self.x)
+        self.full_model.forward(self.x,out=self.ybar)
         
     def update_objective(self):
         return 0
