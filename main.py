@@ -102,7 +102,7 @@ class Submission (Algorithm):
         return rdpG_        
 
     def makeFFT_2D_filter (self):
-        d_ = .65
+        d_ = .95
         imShape_ = self.x.shape
         tRes_ = 0
         # find TOF res
@@ -262,11 +262,11 @@ class Submission (Algorithm):
         sDir = grad*self.prec
       #  sDir.write('first_mult.hv')
      #   sDir *= self.mask
-     #   ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
-    #    ftS *= self.FFTFilter
-    #    ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
-    #    ftS = ndi.gaussian_filter(ftS,(0.5,0,0))
-    #    sDir.fill(ftS)
+        ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
+        ftS *= self.FFTFilter
+        ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
+        ftS = ndi.gaussian_filter(ftS,(0.4,0,0))
+        sDir.fill(ftS)
         sDir *= self.prec
         
         #sDir *= self.mask
@@ -285,8 +285,8 @@ class Submission (Algorithm):
        # print ('FPSD took' + str(time.time()-ts))
         ssNum = sDir.dot(gradI)
 
-    #    ssDen = fpSD.dot((fpSD/yDen)) #*42
-        ssDen = fpSD.dot((fpSD/self.ybar)) #*42
+        ssDen = fpSD.dot((fpSD/yDen)) #*42
+    #    ssDen = fpSD.dot((fpSD/self.ybar)) #*42
         ssNP, ssDP = self.rdp_step_size(sDir.as_array())
         #ssString = 'tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}'
         #print(ssString.format(ssNum,ssDen,ssNP,ssDP))
