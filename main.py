@@ -3,7 +3,75 @@ from cil.optimisation.utilities import callbacks
 import sirf.STIR as STIR
 import numpy as np
 import scipy.ndimage as ndi
+import scipy.optimize as sci
 import re
+
+def L_grad(alfa,y,y_bar,fp_sdir):
+
+
+    #y_bar_next =np.abs(y_bar+alfa*fp_sdir)+0.0001
+    
+    #NOT WORKING!!!
+    y_bar_next               =  y_bar+alfa*fp_sdir
+    y_bar_next[y_bar_next<=0]=0.01      
+    
+    return np.sum( (y*fp_sdir)/(y_bar_next)-fp_sdir)
+
+
+
+def R_grad (alfa,x_old,kappa_,eps_,pixS_,sdir):
+    R=0
+    x_next=  x_old+alfa*sdir
+    x_next[x_next<=0]=0
+   
+    for xs in range(-1,2):
+        for ys in range (-1,2):
+            for zs in range(-1,2):
+                
+                if (xs == 0) and (ys==0) and (zs==0): 
+                    continue
+                    
+                x_shift    = np.roll(x_next,(zs,xs,ys),axis=(0,1,2)) 
+                s_shift    = np.roll(sdir,(zs,xs,ys),axis=(0,1,2)) 
+                sk_        = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
+                
+                if zs==-1:
+                    x_shift[-1,:,:]   =x_next[-1,:,:]
+          
+                    
+                if zs==1:
+                    x_shift[0,:,:] = x_next[0,:,:]
+
+
+                f     = x_next - x_shift
+                g     = x_next + x_shift
+                diff_s= sdir - s_shift
+                sum_s = sdir + s_shift
+                
+                #wI       = 2*f*diff_s*(g+2*f)-f**2*(sum_s+2*np.where(f*diff_s > 0, 1, -1))
+                wI       = 2*f*diff_s*(g + np.abs(f))-f**2*(sum_s+eps_)
+                
+                wI      /= ( g + 2 * np.abs(f) + eps_)**2
+          
+                
+                wI      *= pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)
+                R       += np.sum(np.sum(np.sum(wI,axis=-1),axis=-1),axis=-1)
+        return R
+
+def Obj_grad (alfa,y,y_bar,fp_sdir, x_old,kappa_,eps_,pixS_,sdir):
+      
+        return L_grad(alfa,y,y_bar,fp_sdir)-\
+                (1/700)*R_grad(alfa,x_old,kappa_,eps_,pixS_,sdir)
+
+
+
+
+
+
+
+
+
+
 
 class MaxIteration(callbacks.Callback):
     """
@@ -96,67 +164,22 @@ class Submission (Algorithm):
             interpF = np.concatenate([interpF,interpF[:,-2:0:-1]],axis=1)
             interpF = interpF.reshape((1,)+imShape_[1:])
         self.FFTFilter = interpF
- 
-    
-   
-    
-    def rdp_step_size (self,sDir_):
-        
-  #      print('\n RDP Step size' + str(sDir_.shape))
-        ssNum = 0
-        ssDen = 0
-        inpImm_ = self.x.as_array()
 
-        kappa_ = self.data.prior.get_kappa().as_array()
-  #      print(kappa_.shape)
-        eps_ = self.data.prior.get_epsilon()
-        beta_ = self.data.prior.get_penalisation_factor()
-        pixS_ = self.x.voxel_sizes()
-        alpha_ = 0
+    def step_size(self,a,b,sDir_,FP_sDir):
+        return sci.root_scalar(Obj_grad,args=(self.data.acquired_data.as_array().flatten(),\
+                                        self.ybar.as_array().flatten(),\
+                                        FP_sDir.as_array().flatten(),\
+                                        self.x.as_array(),\
+                                        self.data.prior.get_kappa().as_array(),self.data.prior.get_epsilon(),\
+                                        self.x.voxel_sizes(),\
+                                        sDir_.as_array()),\
+                                        bracket=[a,b],method='brentq',\
+                                        xtol=0.01, maxiter=20)
 
- #       a2 = np.zeros_like(inpImm_)
- #       np.roll(a2,(-1,1,1),axis=(0,1,2))
- #       print('rolled test imm')
-       # denImm_ = inpImm_ + alpha * sDir_
-        for xs in range(-1,2):
-            for ys in range (-1,2):
-                for zs in range(-1,2):
-                    if (xs == 0) and (ys==0) and (zs==0): 
-        #                print('continuing')
-                        continue
-            #        print ('try rolling')
-          #          print('image' , end='\t')
-                    shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))                         
-         #           print ('image', end='\t')
-                    sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
-            #        print ('kappa')
-           #         print(type(sDir_))
-           #         print(sDir_.shape)
-                    shiftSI_ = np.roll(sDir_,(zs,xs,ys),axis=(0,1,2))                
-                    
-
-           #         print(inpImm_.shape)
-               
-           #         print('done')
-                    if zs==-1:
-                        shiftImm_[-1,:,:]= inpImm_[-1,:,:]
-                        shiftSI_[-1,:,:] = sDir_[-1,:,:]
-                    if zs==1:
-                        shiftImm_[0,:,:] = inpImm_[0,:,:]
-                        shiftSI_[0,:,:] = sDir_[0,:,:]
-                    
-                    wI = 1/(np.abs(inpImm_)+ np.abs(shiftImm_) + alpha_ * (sDir_ + shiftSI_) + 2 * np.abs(inpImm_-shiftImm_+ alpha_ * (sDir_ - shiftSI_)) + eps_)
-                    wI *= pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)
-                    ssNum -= np.dot((inpImm_-shiftImm_).flat,((sDir_-shiftSI_)*wI).flat)
-                    ssDen += np.dot((shiftSI_-sDir_).flat,((shiftSI_-sDir_)*wI).flat)
-        ssNum *= beta_
-        ssDen *= beta_
-     #   print('done RDP ss')
-        return ssNum,ssDen
 
     
     def update(self):
-   #     self.test_step()
+        #self.test_step()
         gradSino = self.data.acquired_data/self.ybar - 1
         gradI = self.full_model.backward(gradSino) 
         # Compute gradient of penalty
@@ -180,15 +203,15 @@ class Submission (Algorithm):
         self.prevGrad = grad.clone()
 
         ## compute step size
-        fpSD = self.lin_model.forward(sDir) #,subset_num=0,num_subsets=42) #*multCorr
-        ssNum = sDir.dot(gradI)
-        ssDen = fpSD.dot((fpSD/self.ybar)) #*42
-        ssNP, ssDP = self.rdp_step_size(sDir.as_array())
+        fpSD = self.lin_model.forward(sDir) 
+        #ssNum = sDir.dot(gradI)
+        #ssDen = fpSD.dot((fpSD/self.ybar))
+        #ssNP, ssDP=self.rdp_step_size(sDir.as_array())
 
-        stepSize = (ssNum+ssNP)/(ssDen+ssDP)
-     #   print('stepSize=' + str(stepSize))
+        stepSize = self.step_size(0.1,2,sDir,fpSD)
+        print(stepSize.root)
 
-        self.x += (stepSize*sDir)
+        self.x += (stepSize.root*sDir)
 
         self.x.maximum(0, out=self.x)
         self.full_model.forward(self.x,out=self.ybar)
@@ -197,4 +220,4 @@ class Submission (Algorithm):
         return 0
         
          #   ssTomo = ssNum/ssDen
-submission_callbacks = [MaxIteration(50)]
+submission_callbacks = [MaxIteration(30)]
