@@ -13,7 +13,7 @@ def L_grad(alfa,y,y_bar,fp_sdir):
     
     #NOT WORKING!!!
     y_bar_next               =  y_bar+alfa*fp_sdir
-    y_bar_next[y_bar_next<=0]=0.01      
+    y_bar_next[y_bar_next<=0]=0.001      
     
     return np.sum( (y*fp_sdir)/(y_bar_next)-fp_sdir)
 
@@ -208,7 +208,7 @@ class Submission (Algorithm):
         #ssDen = fpSD.dot((fpSD/self.ybar))
         #ssNP, ssDP=self.rdp_step_size(sDir.as_array())
 
-        stepSize = self.step_size(0.1,2,sDir,fpSD)
+        stepSize = self.step_size(0.001,0.8,sDir,fpSD)
         print(stepSize.root)
 
         self.x += (stepSize.root*sDir)
