@@ -44,9 +44,12 @@ class Submission (Algorithm):
         self.kappaArr = self.data.prior.get_kappa().as_array()
         self.ybar = acq_model.forward(self.x)
         self.prec = self.x.get_uniform_copy(0)
-        self.prec = acq_model.backward(data.mult_factors/self.ybar)
+        fp1 = self.lin_model.forward(self.x.get_uniform_copy(1))
+        #self.prec = acq_model.backward(data.mult_factors/self.ybar)
+        self.prec = acq_model.backward(fp1/self.ybar)
         
         precArr = self.prec.as_array()
+#        self.kappaArr = np.sqrt(precArr) #*np.sqrt(precArr.shape[1])
         #precArr = self.kappaArr.copy()
         precArr += self.rdp_hess_diag()
         mask = (precArr>1)
