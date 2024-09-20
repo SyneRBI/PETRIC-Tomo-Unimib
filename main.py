@@ -56,9 +56,9 @@ class Submission (Algorithm):
         structuring_element = np.array([[0, 1, 0],
                           [1, 1, 1],
                           [0, 1, 0]]).astype(bool)
-        structuring_element = structuring_element.reshape((-1,3,3))                 
+        structuring_element = structuring_element.reshape((1,3,3))                 
         precDil = precArr.copy()                        
-        for _ in range(15):
+        for _ in range(22):
             precDil = ndi.grey_dilation(precDil,structure=structuring_element)
             precDil[mask] = precArr[mask]
         
@@ -75,11 +75,12 @@ class Submission (Algorithm):
         self.prevGrad = self.x.get_uniform_copy(0)
         self.prevSDir = self.x.get_uniform_copy(0)
         self.makeFFT_2D_filter()
+        self.immArr = self.x.as_array()
         super().__init__()
         self.configured = True       
     
     def rdp_grad (self):
-        inpImm_ = self.x.as_array()
+        inpImm_ = self.immArr
         kappa_ = self.kappaArr
         rdpG_ = np.zeros_like(inpImm_)
         eps_ = self.data.prior.get_epsilon()
@@ -179,51 +180,72 @@ class Submission (Algorithm):
                         shiftImm_[0,:,:] = inpImm_[0,:,:]
 
                     tempW = pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)             
-                    rdpG_ += 4*tempW*(eps_ +2 * shiftImm_)**2 /(inpImm_+ shiftImm_ + 2*np.abs(inpImm_-shiftImm_ )+eps_)** 3 
+                    rdpG_ += 2*tempW*(eps_ +2 * shiftImm_)**2 /(inpImm_+ shiftImm_ + 2*np.abs(inpImm_-shiftImm_ )+eps_)** 3 
                     
         rdpG_ *= beta_
         return rdpG_
 
+    
+    def rdp_step_size (self,sDir_,alpha_=0):
         
-    def rdp_step_size (self,sDir_):
-        
-  #      print('\n RDP Step size' + str(sDir_.shape))
         ssNum = 0
         ssDen = 0
         inpImm_ = self.x.as_array()
         kappa_ = self.kappaArr
 
+        eps_ = self.data.prior.get_epsilon()
+        beta_ = self.data.prior.get_penalisation_factor()
+        pixS_ = self.x.voxel_sizes()
+   #     alpha_ = 0
+
+        for xs in range(-1,2):
+            for ys in range (-1,2):
+                for zs in range(-1,2):
+                    if (xs == 0) and (ys==0) and (zs==0): 
+                        continue
+
+                    shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))                         
+                    sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
+                    shiftSI_ = np.roll(sDir_,(zs,xs,ys),axis=(0,1,2))                
+
+                    if zs==-1:
+                        shiftImm_[-1,:,:]= inpImm_[-1,:,:]
+                        shiftSI_[-1,:,:] = sDir_[-1,:,:]
+                    if zs==1:
+                        shiftImm_[0,:,:] = inpImm_[0,:,:]
+                        shiftSI_[0,:,:] = sDir_[0,:,:]
+                    wI = 1/(inpImm_+ shiftImm_ + alpha_ * (sDir_ + shiftSI_) + 2 * np.abs(inpImm_-shiftImm_+ alpha_ * (sDir_ - shiftSI_)) + eps_)**2
+                    wI *= (inpImm_ + 3*shiftImm_ + alpha_ * (sDir_ + 3* shiftSI_) + 2 * np.abs(inpImm_-shiftImm_+ alpha_ * (sDir_ - shiftSI_)) + 2*eps_)
+                    wI *= pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)
+                    ssNum -= np.matmul((inpImm_-shiftImm_).flatten().T,((sDir_-shiftSI_)*wI).flat)
+                    ssDen += np.matmul((shiftSI_-sDir_).flatten().T,((shiftSI_-sDir_)*wI).flat)
+        ssNum *= (beta_)
+        ssDen *= (beta_)
+        return ssNum,ssDen
+
+    
+    def rdp_step_size_old (self,sDir_):
         
-  #      print(kappa_.shape)
+        ssNum = 0
+        ssDen = 0
+        inpImm_ = self.x.as_array()
+        kappa_ = self.kappaArr
+
         eps_ = self.data.prior.get_epsilon()
         beta_ = self.data.prior.get_penalisation_factor()
         pixS_ = self.x.voxel_sizes()
         alpha_ = 0
 
- #       a2 = np.zeros_like(inpImm_)
- #       np.roll(a2,(-1,1,1),axis=(0,1,2))
- #       print('rolled test imm')
-       # denImm_ = inpImm_ + alpha * sDir_
         for xs in range(-1,2):
             for ys in range (-1,2):
                 for zs in range(-1,2):
                     if (xs == 0) and (ys==0) and (zs==0): 
-        #                print('continuing')
                         continue
-            #        print ('try rolling')
-          #          print('image' , end='\t')
-                    shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))                         
-         #           print ('image', end='\t')
-                    sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
-            #        print ('kappa')
-           #         print(type(sDir_))
-           #         print(sDir_.shape)
-                    shiftSI_ = np.roll(sDir_,(zs,xs,ys),axis=(0,1,2))                
-                    
 
-           #         print(inpImm_.shape)
-               
-           #         print('done')
+                    shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))                         
+                    sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
+                    shiftSI_ = np.roll(sDir_,(zs,xs,ys),axis=(0,1,2))                
+
                     if zs==-1:
                         shiftImm_[-1,:,:]= inpImm_[-1,:,:]
                         shiftSI_[-1,:,:] = sDir_[-1,:,:]
@@ -236,35 +258,63 @@ class Submission (Algorithm):
                     ssDen += np.matmul((shiftSI_-sDir_).flatten().T,((shiftSI_-sDir_)*wI).flat)
         ssNum *= (beta_)
         ssDen *= (beta_)
-     #   print('done RDP ss')
         return ssNum,ssDen
+        
+    def rdp_den_exact (self,sDir_,alpha_=0):
+        
+       
+        ssDen = 0
+        inpImm_ = self.immArr+alpha_*sDir_
+        inpImm_[inpImm_<0]=0
+        kappa_ = self.kappaArr
+
+        eps_ = self.data.prior.get_epsilon()
+        beta_ = self.data.prior.get_penalisation_factor()
+        pixS_ = self.x.voxel_sizes()
+
+        for xs in range(-1,2):
+            for ys in range (-1,2):
+                for zs in range(-1,2):
+                    if (xs == 0) and (ys==0) and (zs==0): 
+                        continue
+
+                    shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))                         
+                    sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
+                    shiftSI_ = np.roll(sDir_,(zs,xs,ys),axis=(0,1,2))                
+
+                    if zs==-1:
+                        shiftImm_[-1,:,:]= inpImm_[-1,:,:]
+                        shiftSI_[-1,:,:] = sDir_[-1,:,:]
+                    if zs==1:
+                        shiftImm_[0,:,:] = inpImm_[0,:,:]
+                        shiftSI_[0,:,:] = sDir_[0,:,:]
+                    wI = 1/(inpImm_+ shiftImm_ + 2 * np.abs(inpImm_-shiftImm_) + eps_)**3
+                    wI *= pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)
+                    wI *= ((2*shiftImm_+eps_)**2 * sDir_**2 -(2*inpImm_+eps_)*(2*shiftImm_+eps_)*sDir_*shiftSI_)
+                    
+                    ssDen += np.sum(np.sum(np.sum(wI,axis=-1),axis=-1),axis=-1)
+        ssDen *= (2*beta_)
+        return ssDen       
 
     
     def update(self):
-   #     self.test_step()
-   #     yDen = self.ybar.copy()
-   #     yDen.maximum(self.data.additive_term,out=yDen)   
+        eps_ = self.data.prior.get_epsilon()
+
    #     gradSino = (self.data.acquired_data-self.ybar)/yDen 
         gradSino = self.data.acquired_data/self.ybar - 1
      #   ts = time.time()
         gradI = self.full_model.backward(gradSino) 
-    #    print ('BP took' + str(time.time()-ts))
-   #     print('NaNs in the tomo gradient:' + str(np.max(np.isnan(gradI.as_array()))))
+
         # Compute gradient of penalty
-        #pGrad = self.data.prior.gradient(self.x)
-        pGrad = gradI.get_uniform_copy(0)
-        pGrad.fill(self.rdp_grad())
+        pGrad = self.data.prior.gradient(self.x)
+        #pGrad = gradI.get_uniform_copy(0)
+       # pGrad.fill(self.rdp_grad())
         grad = gradI - pGrad
         
-     #   grad.write('grad.hv')
-
         # Search direction is gradient divived by preconditioner
-        #sDir = grad / (self.prec) # 
-        #sDir = grad/(self.prec.sqrt())
-       # self.prec.write('prec.hv')
+
         sDir = grad*self.prec
-      #  sDir.write('first_mult.hv')
-     #   sDir *= self.mask
+
         ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
         ftS *= self.FFTFilter
         ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
@@ -272,8 +322,9 @@ class Submission (Algorithm):
         sDir.fill(ftS)
         sDir *= self.prec
         
-        #sDir *= self.mask
+        sDir *= self.mask
         #sDir = sDir/(self.prec.sqrt())
+        sDirArr = sDir.as_array()
         
         if (self.prevGrad.max()>0):
             beta = (grad-self.prevGrad).dot(sDir)/self.prevGrad.dot(self.prevSDir)
@@ -289,31 +340,115 @@ class Submission (Algorithm):
         ssNum = sDir.dot(gradI)
 
     #    ssDen = fpSD.dot((fpSD/yDen)) #*42
-        ssDen = fpSD.dot((fpSD/self.ybar)) #*42
-        ssNP, ssDP = self.rdp_step_size(sDir.as_array())
-        #ssString = 'tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}'
-        #print(ssString.format(ssNum,ssDen,ssNP,ssDP))
+        ssDen = fpSD.dot(fpSD/self.ybar) #*42
+        # tSS = 0
+        
+        
+  #      for _ in range(10):
+        ssNP, ssDP = self.rdp_step_size_old(sDirArr)
 
+        ssString = 'Old step size: tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}, stepSize = {:.1e}'
         stepSize = (ssNum+ssNP)/(ssDen+ssDP)
-     #   ts = time.time()
-        
-     #   print('mult imm took ' + str(time.time()-ts))
-     #   sDir.write('sDir.hv')
-     #   print('stepSize=' + str(stepSize))
+        print(ssString.format(ssNum,ssDen,ssNP,ssDP,stepSize))
 
-        self.x.sapyb(1,sDir,stepSize,out=self.x) #    += (sDir) #*self.mask)
-        # ts = time.time()
-        #self.ybar.sapyb(1,fpSD,stepSize,out=self.ybar)
-        # print ('sapyb of ybar took' + str(time.time()-ts))
-        
-        # ts = time.time()
-        #fpSD *= stepSize
-        # print('mult sino took ' + str(time.time()-ts))
-        # ts = time.time()
-        #self.ybar += (fpSD)
-        # print('adding sino took ' + str(time.time()-ts))
+        numNew = sDir.dot(grad)
+        newDenRDP = self.rdp_den_exact(sDirArr)
+        ssString = 'New step size: num = {:.1e} rdpDen = {:.1e} stepSize = {:.1e}'
+        stepSize = (numNew)/(ssDen+newDenRDP)
+        print(ssString.format(numNew,newDenRDP,stepSize))
 
+        # Yet another step size:
+  
+        inSS = stepSize
+        resetFlag = False
+        tomoDenOld = ssDen
+        tomoDenA0 = ssDen
+        rdpDenOld = newDenRDP
+        newSS = 0
+        for ssIt in range(2):
+            ts = time.time()
+            ybarNit = self.ybar.sapyb(1,fpSD,inSS)
+            ybarNit = ybarNit.maximum(self.data.additive_term*.2)
+            tomoNum = fpSD.dot(self.data.acquired_data/ybarNit -1 )
+            if np.isnan(tomoNum):
+                print('nanNum at {:.2e}'.format(inSS))
+                inSS*=0.9
+                continue
+            tTomoNum = time.time()-ts
+           # print (tTomoNum)
+            
+            if ssIt>0:
+                if np.isinf(tomoNum):
+                    print('reset num tomo too high')
+                    resetFlag = True
+            tomoNumOld = tomoNum
+           # tomoDen = (fpSD/(self.ybar.sapyb(1,fpSD,inSS))).dot(self.data.acquired_data/(self.ybar.sapyb(1,fpSD,inSS)))
+            ts = time.time()
+            # tomoDen = fpSD.dot((fpSD/(self.ybar.sapyb(1,fpSD,inSS)))*(self.data.acquired_data/(self.ybar.sapyb(1,fpSD,inSS))))
+            tomoDen = fpSD.dot((fpSD/ybarNit)*(self.data.acquired_data/ybarNit))
+            tTomoDen = time.time()-ts
+            if (tomoDen/tomoDenA0) > 3:
+                print ('testing neg in ybar')
+               # if (self.ybar.sapyb(1,fpSD,inSS).sapyb(1,self.data.additive_term,-.25).min()<0):
+                if (ybarNit.sapyb(1,self.data.additive_term,-.25).min()<0):
+                    print('neg in sino den')
+                    inSS *=.75
+                    continue
+                else:
+                    if (tomoDen/tomoDenA0)>10:
+                        print ('break tomoDen 10x tomoDen Or')
+                        inSS *=.5
+                        break
+                    else:
+                        print('all good')
+                # continue
+            ts = time.time()
+            rdpNum = -sDir.dot(self.data.prior.gradient(self.x.sapyb(1,sDir,inSS).maximum(0)))
+            tRdpNum = time.time()-ts
+            if ssIt>0:
+                if np.isinf(rdpNum):
+                    resetFlag = True
+            rdpNumOld = rdpNum
+            ts = time.time()
+            rdpDen = self.rdp_den_exact(sDirArr,alpha_=inSS)
+            tRdpDen = time.time()-ts
+           # timeStr = 'tomoNum: {:.1e} s tomoDen: {:.1e} s rdpNum {:.1e} s rdpDen {:.1e} s'
+           # print (timeStr.format(tTomoNum,tTomoDen,tRdpNum,tRdpDen))
+            oldSS = newSS
+            newSS = (tomoNum+rdpNum)/(rdpDen+tomoDen)
+            ssString = '\t Loop ss: tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}, stepSize = {:.1e}'
+            print(ssString.format(tomoNum,tomoDen,rdpNum,rdpDen,newSS), end='\t')
+                       
+            if resetFlag:
+                print ('resetting')
+                inSS = inSS/2
+            else:
+                if ((oldSS*newSS)<0) & (ssIt>2):
+                    inSS += newSS/3
+                else:
+                    inSS += ((newSS)*1/1.5)
+                    if ((newSS/oldSS) > .66) & (ssIt > 2):
+                        print('thinking about ultra step')
+                        if ((tomoDen/tomoDenOld) < 1.4) & ((rdpDen/rdpDenOld)<1.4) :
+                            inSS += (1.2*newSS)
+                            print ('ultra step')
+            
+            if np.abs((newSS/inSS))<1e-3:
+                print ('breaking')
+                break
+            print ('new tot step={:.2f}'.format(inSS))
+            tomoDenOld = tomoDen
+            rdpDenOld = rdpDen
+            resetFlag = False
+            
+            
+
+        px = self.x.copy()
+        self.x.sapyb(1,sDir,inSS,out=self.x) #    += (sDir) #*self.mask)
+        
+        
         self.x.maximum(0, out=self.x)
+        self.prevSDir = self.x - px
         self.full_model.forward(self.x,out=self.ybar)
         
     def update_objective(self):
