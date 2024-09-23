@@ -69,6 +69,7 @@ class Submission (Algorithm):
         self.prec.write('prec.hv')
         #self.prec
      #   print('\n\n there are ' + str(np.max(np.isnan(self.prec.as_array()))) + ' NaNs in the prec')
+ #       mask = 1 - ndi.binary_dilation(precArr<1,iterations=2)
         self.mask = self.x.get_uniform_copy(0)
         self.mask.fill(mask)
         
@@ -315,11 +316,11 @@ class Submission (Algorithm):
 
         sDir = grad*self.prec
 
-        ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
-        ftS *= self.FFTFilter
-        ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
-        ftS = ndi.gaussian_filter(ftS,(0.4,0,0))
-        sDir.fill(ftS)
+  #      ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
+  #      ftS *= self.FFTFilter
+  #      ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
+ #       ftS = ndi.gaussian_filter(ftS,(0.4,0,0))
+  #      sDir.fill(ftS)
         sDir *= self.prec
         
         sDir *= self.mask
@@ -345,11 +346,11 @@ class Submission (Algorithm):
         
         
   #      for _ in range(10):
-        ssNP, ssDP = self.rdp_step_size_old(sDirArr)
+   #     ssNP, ssDP = self.rdp_step_size_old(sDirArr)
 
-        ssString = 'Old step size: tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}, stepSize = {:.1e}'
-        stepSize = (ssNum+ssNP)/(ssDen+ssDP)
-        print(ssString.format(ssNum,ssDen,ssNP,ssDP,stepSize))
+   #     ssString = 'Old step size: tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}, stepSize = {:.1e}'
+  #      stepSize = (ssNum+ssNP)/(ssDen+ssDP)
+   #     print(ssString.format(ssNum,ssDen,ssNP,ssDP,stepSize))
 
         numNew = sDir.dot(grad)
         newDenRDP = self.rdp_den_exact(sDirArr)
@@ -365,82 +366,55 @@ class Submission (Algorithm):
         tomoDenA0 = ssDen
         rdpDenOld = newDenRDP
         newSS = 0
-        for ssIt in range(2):
+        f0 = numNew
+        ssMin = 0
+        fa = 1
+        fc = -1
+        xa = 0
+        xc = stepSize*2
+        
+        newNum = 1
+        while (newNum>0):
+           ybarNit = self.ybar.sapyb(1,fpSD,inSS)
+           ybarNit = ybarNit.maximum(self.data.additive_term*.2)
+           tomoNum = fpSD.dot(self.data.acquired_data/ybarNit -1 )             
+           rdpNum = -sDir.dot(self.data.prior.gradient(self.x.sapyb(1,sDir,inSS).maximum(0)))
+           newNum = tomoNum + rdpNum
+           if (newNum>0):
+            inSS*=2
+            xc = inSS
+           else:
+            xc = inSS
+            inSS *=.5
+        
+             
+        for ssIt in range(6):
             ts = time.time()
             ybarNit = self.ybar.sapyb(1,fpSD,inSS)
             ybarNit = ybarNit.maximum(self.data.additive_term*.2)
-            tomoNum = fpSD.dot(self.data.acquired_data/ybarNit -1 )
-            if np.isnan(tomoNum):
-                print('nanNum at {:.2e}'.format(inSS))
-                inSS*=0.9
-                continue
-            tTomoNum = time.time()-ts
-           # print (tTomoNum)
-            
-            if ssIt>0:
-                if np.isinf(tomoNum):
-                    print('reset num tomo too high')
-                    resetFlag = True
-            tomoNumOld = tomoNum
-           # tomoDen = (fpSD/(self.ybar.sapyb(1,fpSD,inSS))).dot(self.data.acquired_data/(self.ybar.sapyb(1,fpSD,inSS)))
-            ts = time.time()
-            # tomoDen = fpSD.dot((fpSD/(self.ybar.sapyb(1,fpSD,inSS)))*(self.data.acquired_data/(self.ybar.sapyb(1,fpSD,inSS))))
-            tomoDen = fpSD.dot((fpSD/ybarNit)*(self.data.acquired_data/ybarNit))
-            tTomoDen = time.time()-ts
-            if (tomoDen/tomoDenA0) > 3:
-                print ('testing neg in ybar')
-               # if (self.ybar.sapyb(1,fpSD,inSS).sapyb(1,self.data.additive_term,-.25).min()<0):
-                if (ybarNit.sapyb(1,self.data.additive_term,-.25).min()<0):
-                    print('neg in sino den')
-                    inSS *=.75
-                    continue
-                else:
-                    if (tomoDen/tomoDenA0)>10:
-                        print ('break tomoDen 10x tomoDen Or')
-                        inSS *=.5
-                        break
-                    else:
-                        print('all good')
-                # continue
-            ts = time.time()
+            tomoNum = fpSD.dot(self.data.acquired_data/ybarNit -1 ) 
+
+         #   tomoDen = fpSD.dot((fpSD/ybarNit)*(self.data.acquired_data/ybarNit))
             rdpNum = -sDir.dot(self.data.prior.gradient(self.x.sapyb(1,sDir,inSS).maximum(0)))
-            tRdpNum = time.time()-ts
-            if ssIt>0:
-                if np.isinf(rdpNum):
-                    resetFlag = True
-            rdpNumOld = rdpNum
-            ts = time.time()
-            rdpDen = self.rdp_den_exact(sDirArr,alpha_=inSS)
-            tRdpDen = time.time()-ts
-           # timeStr = 'tomoNum: {:.1e} s tomoDen: {:.1e} s rdpNum {:.1e} s rdpDen {:.1e} s'
-           # print (timeStr.format(tTomoNum,tTomoDen,tRdpNum,tRdpDen))
-            oldSS = newSS
-            newSS = (tomoNum+rdpNum)/(rdpDen+tomoDen)
-            ssString = '\t Loop ss: tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}, stepSize = {:.1e}'
-            print(ssString.format(tomoNum,tomoDen,rdpNum,rdpDen,newSS), end='\t')
-                       
-            if resetFlag:
-                print ('resetting')
-                inSS = inSS/2
+
+         #   rdpDen = self.rdp_den_exact(sDirArr,alpha_=inSS)
+         #   oldSS = newSS
+            newNum = tomoNum + rdpNum
+            if ((newNum)>0):
+                xa = inSS
+                inSS=(inSS+xc)/2
             else:
-                if ((oldSS*newSS)<0) & (ssIt>2):
-                    inSS += newSS/3
-                else:
-                    inSS += ((newSS)*1/1.5)
-                    if ((newSS/oldSS) > .66) & (ssIt > 2):
-                        print('thinking about ultra step')
-                        if ((tomoDen/tomoDenOld) < 1.4) & ((rdpDen/rdpDenOld)<1.4) :
-                            inSS += (1.2*newSS)
-                            print ('ultra step')
+                xc = inSS
+                inSS = (inSS+xa)/2
+                
+            #newSS = (tomoNum+rdpNum)/(rdpDen+tomoDen)
+            # ssString = '\t Loop ss: tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}, stepSize = {:.1e}'
+            # print(ssString.format(tomoNum,tomoDen,rdpNum,rdpDen,newSS), end='\t')
+            ssString = '\t Loop ss: tomoNum = {:.1e} rdpNum = {:.1e}, stepSize = {:.1e}'
+            print(ssString.format(tomoNum,rdpNum,inSS)) #, end='\t')            
             
-            if np.abs((newSS/inSS))<1e-3:
-                print ('breaking')
-                break
-            print ('new tot step={:.2f}'.format(inSS))
-            tomoDenOld = tomoDen
-            rdpDenOld = rdpDen
-            resetFlag = False
-            
+            # inSS +=newSS
+            # print('curSS = {:.2f}'.format(inSS))
             
 
         px = self.x.copy()

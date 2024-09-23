@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/cP_NDF2_pFP1_ss2")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/conj_diag_bisecS")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -249,9 +249,13 @@ if SRCDIR.is_dir():
                           (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
                            [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
                            (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
-                         [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")])] #,
-                          #(SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
-                          # [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
+                         [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
+                         (SRCDIR / "Mediso_NEMA_IQ", OUTDIR / "Mediso_IQ",
+                         [MetricsWithTimeout(outdir=OUTDIR / "Mediso_IQ")]),
+                         (SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
+                         [MetricsWithTimeout(outdir=OUTDIR / "IQ_lowcounts")]),
+                          (SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
+                           [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
 else:
     log.warning("Source directory does not exist: %s", SRCDIR)
     data_dirs_metrics = [(None, None, [])] # type: ignore
