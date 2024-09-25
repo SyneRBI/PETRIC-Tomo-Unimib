@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/conj_diag_bisecS")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/conj_hRDPs_Diag_bisecS")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -61,12 +61,16 @@ class SaveIters(Callback):
         self.outdir = Path(outdir)
         self.outdir.mkdir(parents=True, exist_ok=True)
         self.csv = csv.writer((self.outdir / csv_file).open("w", buffering=1))
+    
         self.csv.writerow(("iter", "objective"))
 
     def __call__(self, algo: Algorithm):
+        if algo.iteration==0:
+            algo.prec.write(str(self.outdir / 'prec.hv'))
         if not self.skip_iteration(algo):
             log.debug("saving iter %d...", algo.iteration)
             algo.x.write(str(self.outdir / f'iter_{algo.iteration:04d}.hv'))
+            algo.prevSDir.write(str(self.outdir / f'sDir {algo.iteration:04d}.hv'))
             self.csv.writerow((algo.iteration, algo.get_last_loss()))
             log.debug("...saved")
         if algo.iteration == algo.max_iteration:
@@ -143,7 +147,7 @@ class QualityMetrics(ImageQualityCallback, Callback):
 
 class MetricsWithTimeout(cil_callbacks.Callback):
     """Stops the algorithm after `seconds`"""
-    def __init__(self, seconds=330, outdir=OUTDIR, transverse_slice=None, coronal_slice=None, **kwargs):
+    def __init__(self, seconds=530, outdir=OUTDIR, transverse_slice=None, coronal_slice=None, **kwargs):
         super().__init__(**kwargs)
         self._seconds = seconds
         self.callbacks = [
@@ -255,7 +259,7 @@ if SRCDIR.is_dir():
                          (SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
                          [MetricsWithTimeout(outdir=OUTDIR / "IQ_lowcounts")]),
                           (SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
-                           [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
+                          [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
 else:
     log.warning("Source directory does not exist: %s", SRCDIR)
     data_dirs_metrics = [(None, None, [])] # type: ignore

@@ -33,6 +33,7 @@ class Submission (Algorithm):
         tImmArr[tImmArr<tempEps]=0
         # self.x.fill(tImmArr)
         epsCorr = data.additive_term.max()*1e-6
+        self.epsCorrSino = epsCorr
         data.additive_term+=epsCorr
         self.data = data
         acq_model = STIR.AcquisitionModelUsingParallelproj()
@@ -41,12 +42,18 @@ class Submission (Algorithm):
         acq_model.set_up(data.acquired_data, self.x)
         self.full_model = acq_model
         self.lin_model = acq_model.get_linear_acquisition_model()
-        self.kappaArr = self.data.prior.get_kappa().as_array()
+        
         self.ybar = acq_model.forward(self.x)
         self.prec = self.x.get_uniform_copy(0)
+        self.kappa = self.data.prior.get_kappa()
+        
         fp1 = self.lin_model.forward(self.x.get_uniform_copy(1))
         #self.prec = acq_model.backward(data.mult_factors/self.ybar)
         self.prec = acq_model.backward(fp1/self.ybar)
+        
+        self.kappaArr = np.sqrt(self.prec.as_array())
+       #self.data.prior.set_kappa(self.kappa.fill(self.kappaArr))
+       # self.data.prior.set_up(self.x)
         
         precArr = self.prec.as_array()
 #        self.kappaArr = np.sqrt(precArr) #*np.sqrt(precArr.shape[1])
@@ -77,6 +84,10 @@ class Submission (Algorithm):
         self.prevSDir = self.x.get_uniform_copy(0)
         self.makeFFT_2D_filter()
         self.immArr = self.x.as_array()
+        self.ybarNit = self.ybar.get_uniform_copy(0)
+        self._ybarNit = self.ybar.get_uniform_copy(0)
+        self.fpSD = self.ybar.get_uniform_copy(0)
+        self.Sino1 = self.ybar.get_uniform_copy(1)
         super().__init__()
         self.configured = True       
     
@@ -118,7 +129,7 @@ class Submission (Algorithm):
             tRes_ = float(regExpMatch.group(1))
         pixS_ = self.x.voxel_sizes()[1]
         
-        order = np.power(2,np.ceil(np.log2(imShape_[1]))).astype(np.uint32)
+        order = 2*np.power(2,np.ceil(np.log2(imShape_[1]))).astype(np.uint32)
        # freqN = np.power(2,np.ceil(np.log2(imShape_[1]//2))).astype(np.uint32)
       #  print (order)
         freqN = order//2
@@ -161,7 +172,7 @@ class Submission (Algorithm):
  
     
     def rdp_hess_diag (self):
-        inpImm_ = self.x.as_array()
+        inpImm_ = ndi.gaussian_filter(self.x.as_array(),1.3)
         kappa_ = self.kappaArr
         rdpG_ = np.zeros_like(inpImm_)
         eps_ = self.data.prior.get_epsilon()
@@ -301,7 +312,10 @@ class Submission (Algorithm):
     def update(self):
         eps_ = self.data.prior.get_epsilon()
 
-   #     gradSino = (self.data.acquired_data-self.ybar)/yDen 
+## Mettere la log likelihood al posto che gradienti manuali
+## Calcolare denominatore tomografico approssimato con filtro?  
+
+  #     gradSino = (self.data.acquired_data-self.ybar)/yDen 
         gradSino = self.data.acquired_data/self.ybar - 1
      #   ts = time.time()
         gradI = self.full_model.backward(gradSino) 
@@ -316,11 +330,11 @@ class Submission (Algorithm):
 
         sDir = grad*self.prec
 
-  #      ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
+   #     ftS = np.fft.fft2(sDir.as_array(),axes=(1,2))
   #      ftS *= self.FFTFilter
   #      ftS = np.real(np.fft.ifft2(ftS,axes=(1,2)))
- #       ftS = ndi.gaussian_filter(ftS,(0.4,0,0))
-  #      sDir.fill(ftS)
+  #      ftS = ndi.gaussian_filter(ftS,(0.4,0,0))
+ #       sDir.fill(ftS)
         sDir *= self.prec
         
         sDir *= self.mask
@@ -335,29 +349,40 @@ class Submission (Algorithm):
         self.prevGrad = grad.clone()
 
         ## compute step size
-      #  ts = time.time()
-        fpSD = self.lin_model.forward(sDir) #,subset_num=0,num_subsets=42) #*multCorr
-       # print ('FPSD took' + str(time.time()-ts))
+        self.lin_model.forward(sDir,out=self.fpSD) #,subset_num=0,num_subsets=42) #*multCorr
         ssNum = sDir.dot(gradI)
-
+        
+        # fpsdArr = fpSD.as_array()
+        # yBarArr = self.ybar.as_array()
+        # yArr = self.data.acquired_data.as_array()
+        self.ybar.power(-1,out=self._ybarNit)
+        ssDen = self.fpSD.dot(self.fpSD*self._ybarNit)
+        
+        #ssDen = np.dot(fpsdArr.flat,(fpsdArr/yBarArr).flat)
+        
     #    ssDen = fpSD.dot((fpSD/yDen)) #*42
-        ssDen = fpSD.dot(fpSD/self.ybar) #*42
-        # tSS = 0
-        
-        
-  #      for _ in range(10):
-   #     ssNP, ssDP = self.rdp_step_size_old(sDirArr)
+        #ssDen = fpSD.dot(fpSD/self.ybar) #*42
 
-   #     ssString = 'Old step size: tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}, stepSize = {:.1e}'
-  #      stepSize = (ssNum+ssNP)/(ssDen+ssDP)
-   #     print(ssString.format(ssNum,ssDen,ssNP,ssDP,stepSize))
+
 
         numNew = sDir.dot(grad)
         newDenRDP = self.rdp_den_exact(sDirArr)
-        ssString = 'New step size: num = {:.1e} rdpDen = {:.1e} stepSize = {:.1e}'
+        ssString = 'New step size: num = {:.1e} rdpDen = {:.1e} tomoDen = {:.1e} stepSize = {:.1e}'
         stepSize = (numNew)/(ssDen+newDenRDP)
-        print(ssString.format(numNew,newDenRDP,stepSize))
+        print(ssString.format(numNew,newDenRDP,ssDen,stepSize))
 
+        # sde = sDirArr.max()
+        # sDirRat = -(self.immArr)/(sDirArr-(sde*1e-6))
+        # maxSS = sDirRat[sDirRat>0].min()
+        # inMaxSS = maxSS
+        # contFlag = True
+        # while (contFlag):
+            # maxSS *=2
+            # tempImm = self.immArr + maxSS * sDirArr
+            # if (tempImm.min() < -(2*eps_)) or (tempImm[tempImm<(-.3*eps_)].size>10):
+                # contFlag = False
+                # maxSS /=2
+        # print ('inmSS = {:.2e}, maxSS ={:.2e}'.format(inMaxSS,maxSS))
         # Yet another step size:
   
         inSS = stepSize
@@ -372,14 +397,27 @@ class Submission (Algorithm):
         fc = -1
         xa = 0
         xc = stepSize*2
-        
+        if (inSS<0):
+            inSS = abs(inSS)*.5
+            xc = inSS*1.5
         newNum = 1
+    
         while (newNum>0):
-           ybarNit = self.ybar.sapyb(1,fpSD,inSS)
-           ybarNit = ybarNit.maximum(self.data.additive_term*.2)
-           tomoNum = fpSD.dot(self.data.acquired_data/ybarNit -1 )             
+           ts = time.time()
+           self.ybar.sapyb(1,self.fpSD,inSS,out=self.ybarNit)
+           print('adding took' + str(time.time()-ts))
+           if self.ybarNit.min()<(-1e-20):
+               inSS*=.5
+               break
+           
+           self.ybarNit.power(-1,out=self._ybarNit)
+           self.data.acquired_data.sapyb(self._ybarNit,self.Sino1,-1,out=self.ybarNit)
+           #tomoNum = np.dot(fpsdArr.flat,(yArr/yBarNit-1).flat)
+           #tomoNum = fpSD.dot(self.data.acquired_data/ybarNit -1 ) 
+           tomoNum = self.ybarNit.dot(self.fpSD)
            rdpNum = -sDir.dot(self.data.prior.gradient(self.x.sapyb(1,sDir,inSS).maximum(0)))
            newNum = tomoNum + rdpNum
+        #   print ('curSS{:.1e} tomoN={:.1e} rdpN={:.1e} newNum={:.1e}'.format(inSS,tomoNum,rdpNum,newNum))
            if (newNum>0):
             inSS*=2
             xc = inSS
@@ -387,13 +425,43 @@ class Submission (Algorithm):
             xc = inSS
             inSS *=.5
         
-             
-        for ssIt in range(6):
+        
+        
+        for ssIt in range(2):
             ts = time.time()
-            ybarNit = self.ybar.sapyb(1,fpSD,inSS)
-            ybarNit = ybarNit.maximum(self.data.additive_term*.2)
-            tomoNum = fpSD.dot(self.data.acquired_data/ybarNit -1 ) 
-
+            yBarArr = self.ybar.as_array()
+            fpsdArr = self.fpSD.as_array()
+            yArr = self.data.acquired_data.as_array()
+            t1 = time.time()
+            print ('as array took ' + str(t1-ts))
+            
+            yBarNit = yBarArr + inSS*fpsdArr
+   #             yBarNit[yBarNit<0] = addCorrArr[yBarNit<addCorrArr]
+            tomoNum = np.dot(fpsdArr.flat,(yArr/yBarNit-1).flat)            
+            print ('numpy dot and add took ' + str(time.time()-t1))
+            ts = time.time()            
+            self.ybar.sapyb(1,self.fpSD,inSS,out=self.ybarNit)
+            t2 = time.time()
+            print('adding took ' + str(t2-ts))
+            if self.ybarNit.min()<(-1e-10):
+               xc = inSS
+               inSS= (inSS+xa)/2   
+               print (self.ybarNit.min())
+               print (self.epsCorrSino)
+               print('red continuining')
+               continue
+            t3 = time.time()
+            print ('if took' + str(t3-ts))
+     
+            self.ybarNit.power(-1,out=self._ybarNit)
+            t4 = time.time()            
+            print ('inversion took' + str(t4-t3))
+            self.data.acquired_data.sapyb(self._ybarNit,self.Sino1,-1,out=self.ybarNit)
+            t5 = time.time()
+            print('full sapyb took ' + str(t5-t4))
+            tomoNum = self.ybarNit.dot(self.fpSD)
+            print('dot took ' + str(time.time()-t5))
+           #tomoNum = np.dot(fpsdArr.flat,(yArr/yBarNit-1).flat)            
          #   tomoDen = fpSD.dot((fpSD/ybarNit)*(self.data.acquired_data/ybarNit))
             rdpNum = -sDir.dot(self.data.prior.gradient(self.x.sapyb(1,sDir,inSS).maximum(0)))
 
@@ -406,7 +474,16 @@ class Submission (Algorithm):
             else:
                 xc = inSS
                 inSS = (inSS+xa)/2
-                
+            if (xa>xc):
+                print ('breakin wtf?!?')
+                break
+            if (abs(xc/xa)-1)<1e-1:
+                break
+
+            tempImm = self.immArr + inSS * sDirArr
+      #      tStr = 'Glob Min: {:.2f}, N< -eps/3: {:d}, N<-eps: {:d}, N<-2eps: {:d}, N<-4eps {:d}'
+     #       print(tStr.format(tempImm.min()/(-eps_),tempImm[tempImm<-(eps_/3)].size,tempImm[tempImm<-(eps_)].size,tempImm[tempImm<-(eps_*2)].size,tempImm[tempImm<-(eps_*4)].size))
+ 
             #newSS = (tomoNum+rdpNum)/(rdpDen+tomoDen)
             # ssString = '\t Loop ss: tomoNum = {:.1e} tomoDen = {:.1e} rdpNum = {:.1e} rdpDen = {:.1e}, stepSize = {:.1e}'
             # print(ssString.format(tomoNum,tomoDen,rdpNum,rdpDen,newSS), end='\t')
@@ -420,10 +497,17 @@ class Submission (Algorithm):
         px = self.x.copy()
         self.x.sapyb(1,sDir,inSS,out=self.x) #    += (sDir) #*self.mask)
         
-        
-        self.x.maximum(0, out=self.x)
-        self.prevSDir = self.x - px
-        self.full_model.forward(self.x,out=self.ybar)
+        if self.x.min()<0:
+            self.x.maximum(0, out=self.x)
+            self.prevSDir = self.x - px
+        #if (tempImm[tempImm<(-3*eps_)].size)>10:
+            self.full_model.forward(self.x,out=self.ybar)
+        else:
+            
+   #     else:
+            print ('adding fpSD')
+            self.ybar.sapyb(1,self.fpSD,inSS,out = self.ybar)
+        self.immArr = self.x.as_array()
         
     def update_objective(self):
         return 0
