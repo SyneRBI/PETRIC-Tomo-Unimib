@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/conj_hRDPs_Diag_bisecS")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/stirL_conj_hRDPs_Diag_bisecS")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -65,12 +65,12 @@ class SaveIters(Callback):
         self.csv.writerow(("iter", "objective"))
 
     def __call__(self, algo: Algorithm):
-        if algo.iteration==0:
-            algo.prec.write(str(self.outdir / 'prec.hv'))
+#        if algo.iteration==0:
+#            algo.prec.write(str(self.outdir / 'prec.hv'))
         if not self.skip_iteration(algo):
             log.debug("saving iter %d...", algo.iteration)
             algo.x.write(str(self.outdir / f'iter_{algo.iteration:04d}.hv'))
-            algo.prevSDir.write(str(self.outdir / f'sDir {algo.iteration:04d}.hv'))
+          #  algo.prevSDir.write(str(self.outdir / f'sDir {algo.iteration:04d}.hv'))
             self.csv.writerow((algo.iteration, algo.get_last_loss()))
             log.debug("...saved")
         if algo.iteration == algo.max_iteration:
