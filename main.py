@@ -28,10 +28,17 @@ class Submission (Algorithm):
 
         self.x = data.OSEM_image
         tImmArr = self.x.as_array()
-        tImmArr = ndi.gaussian_filter(tImmArr,(0.2,0.2,0.2))
-        tempEps = tImmArr.max()*1e-2
+        tImmArrSm = ndi.gaussian_filter(tImmArr,1.2)
+        tempEps = tImmArrSm.max()*5e-3
+        mask1 = tImmArrSm>(0.5*tempEps)
+        mask1 = ndi.binary_dilation(mask1,iterations=3)
+        self.mask1 = ndi.gaussian_filter(mask1,2)
+        tImmArr = ndi.gaussian_filter(tImmArr,.5)
         tImmArr[tImmArr<tempEps]=0
-        # self.x.fill(tImmArr)
+        tImmArr = ndi.gaussian_filter(tImmArr,.4)
+        
+        self.x.fill(tImmArr)
+        self.immArr = 0
         epsCorr = data.additive_term.max()*1e-6
         self.epsCorrSino = epsCorr
         data.additive_term+=epsCorr
@@ -48,15 +55,20 @@ class Submission (Algorithm):
         self.ll.set_up(self.x)
         
         nAngles = data.acquired_data.dimensions()[2]
-        self.subFactor = nAngles/3
-        usedAngles = [0, nAngles//3, (2*nAngles)//3] #, nAngles//3, (nAngles)//2, (2*nAngles)//3, (5*nAngles)//6 ]
+        nSSAng = 4
+        self.subFactor = nAngles/nSSAng
+        usedAngles = [(x*nAngles)//nAngles for x in range(nSSAng)] #, nAngles//3, (nAngles)//2, (2*nAngles)//3, (5*nAngles)//6 ]
         acqModSS = STIR.AcquisitionModelUsingParallelproj()
         acqModSS.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors.get_subset(usedAngles)))
         acqModSS.set_additive_term(data.additive_term.get_subset(usedAngles))
         acqModSS.set_up(data.acquired_data.get_subset(usedAngles),self.x)
         self.acqModSS = acqModSS
         self.llTomo = STIR.make_Poisson_loglikelihood(data.acquired_data.get_subset(usedAngles),acq_model = acqModSS)
+        self.redData = data.acquired_data.get_subset(usedAngles).as_array()
+        self.redAdd = data.additive_term.get_subset(usedAngles).as_array()
         self.llTomo.set_up(self.x)
+        
+  #      self.subTomoFull = self.llTomo.clone()
         
         self.makeFFT_2D_filter()
         ybar = acq_model.forward(self.x)
@@ -83,8 +95,9 @@ class Submission (Algorithm):
         precDil += 1e-5
         self.prec = np.sqrt(1/precDil)
 
-        mask = 1 - ndi.binary_dilation(precArr<1,iterations=1)
+        mask = 1 - ndi.binary_dilation(precArr<1,iterations=2,border_value=1)
         self.mask = mask
+        self.maskStir = self.x.get_uniform_copy(0).fill(mask)
 
         self.x.fill(self.x.as_array()*mask)
         
@@ -154,7 +167,7 @@ class Submission (Algorithm):
     
     def rdp_hess_diag (self):
         inpImm_ = ndi.gaussian_filter(self.x.as_array(),1.3)
-        kappa_ = self.kappaArr
+        kappa_ = ndi.gaussian_filter(self.kappaArr,1.1)
         rdpG_ = np.zeros_like(inpImm_)
         eps_ = self.data.prior.get_epsilon()
         beta_ = self.data.prior.get_penalisation_factor()
@@ -175,6 +188,7 @@ class Submission (Algorithm):
                     rdpG_ += (eDist*2)*(kappa_*sk_)*(eps_ +2 * shiftImm_)**2 /(inpImm_+ shiftImm_ + 2*np.abs(inpImm_-shiftImm_ )+eps_)** 3 
                     
         rdpG_ *= beta_
+        rdpG_ = ndi.gaussian_filter(rdpG_,0.6)
         return rdpG_
 
     
@@ -224,28 +238,30 @@ class Submission (Algorithm):
         gradArr = grad.as_array()
         # Search direction is gradient divived by preconditioner
 
-        self.sDirArr= gradArr*self.prec
-  #      sDir = np.fft.fft2(self.sDirArr,axes=(1,2))
- #       sDir *= self.FFTFilter
- #       self.sDirArr= np.real(np.fft.ifft2(sDir,axes=(1,2)))
-        self.sDirArr *= (self.prec*self.mask)
+        self.sDirArr= gradArr*self.prec #*self.mask1
+        sDir = np.fft.fft2(self.sDirArr,axes=(1,2))
+        sDir *= self.FFTFilter
+        self.sDirArr= np.real(np.fft.ifft2(sDir,axes=(1,2)))
+        self.sDirArr *= (self.prec*self.mask) #*self.mask1)
         self.sDirSTIR.fill(self.sDirArr)
-        print('applied prec')
+     #   print('applied prec')
         if (self.prevGrad.max()>0):
             beta = np.dot((gradArr-self.prevGrad).flat,self.sDirArr.flat)/np.dot(self.prevGrad.flat,self.prevSDir.flat)
             beta2 =  np.dot((gradArr).flat,self.sDirArr.flat)/np.dot(self.prevGrad.flat,self.prevSDir.flat)
             beta = max(0,beta)
+            print ('beta P-R = {:.2f} beta quadratic = {:.2f}'.format(beta,beta2))
+          #  beta = beta2
             if (beta==0):
                 print ('resetting')
             #print(beta2/beta)
             if ((beta/beta2)>1.3):
                 beta=0
-                print('reset')
-            print ('beta P-R = {:.2f} beta quadratic = {:.2f}'.format(beta,beta2))
+        #        print('reset')
+         #   print ('beta P-R = {:.2f} beta quadratic = {:.2f}'.format(beta,beta2))
             self.sDirArr += beta*self.prevSDir
         self.prevSDir = self.sDirArr.copy()
         self.prevGrad = gradArr.copy()
-        print('computed conjugate')
+    #    print('computed conjugate')
 
         # Compute step size
         # tD = (self.sDirArr * np.sqrt(self.precTomo))
@@ -254,67 +270,146 @@ class Submission (Algorithm):
         # tD = np.real(np.fft.ifft2(tD,axes=(1,2)))
         # tD *= np.sqrt(self.precTomo)
         # tomoDen = np.dot(tD.flat,self.sDirArr.flat)
+              
          ## compare with "better" hessian
-        # ybar = self.full_model.forward(self.x)
-        # fpSD = self.lin_model.forward(self.sDirSTIR)
-        # tomoDenTrue = fpSD.dot(fpSD/ybar)
+     #   ybar = self.full_model.forward(self.x)
+     #   fpSD = self.lin_model.forward(self.sDirSTIR)
+     #   tomoDenTrue = fpSD.dot(fpSD/ybar)
         
         ybar2 = self.acqModSS.forward(self.x)
         fpSD2 = self.acqModSS.get_linear_acquisition_model().forward(self.sDirSTIR)
-        tomoDen = self.subFactor* fpSD2.dot(fpSD2/ybar2)
+        tomoDenC = self.subFactor* fpSD2.dot(fpSD2/ybar2)
         
     #    tomoDenBis = self.sDirSTIR.dot(self.ll.multiply_with_Hessian(self.x,self.sDirSTIR))
      #   print(tomoDenBis)
         
         numNew = np.dot(self.sDirArr.flat,gradArr.flat)
+        
+        
         newDenRDP = self.rdp_den_exact(self.sDirArr)
+        ybAr = ybar2.as_array()
+        fpSD2A = fpSD2.as_array()
+        sinoEps = 1e-15 #ybAr.max()*1e-15
+        inSS = numNew/(tomoDenC+newDenRDP)
+        numTomoSino = self.subFactor*np.dot(fpSD2A.flat,(self.redData/(ybAr+sinoEps)-1).flat)
+                #      -self.subFactor*np.dot(fpSD2A.flat,(self.redData/ybarT2-1).flat)
+        numRDPSep = -self.sDirSTIR.dot(self.data.prior.gradient(self.x))
+        print('numNew: {:.2e}, inSS: {:.2e}, tomoDen {:.2e} rdpDEN {:.2e}'.format(numNew,inSS,tomoDenC,newDenRDP))
+        print(f'numTomo:{numTomoSino:.2e} numRDPSep:{numRDPSep:.2e}')
+     #   inSS = 0
+        # for dummyIt in range(10):
+            # ybarT2 = ybAr + inSS*fpSD2A
+            # ybarT2[ybarT2<(self.redAdd)] = self.redAdd[ybarT2<(self.redAdd)]
+            # ybarT2[ybarT2<1e-15] = 1e-15
+            # numTomo2 = self.subFactor * np.dot((fpSD2A).flat,(self.redData/ybarT2-1).flat)
+        
+            # newRDPNum = -self.sDirSTIR.dot(self.data.prior.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)))
+            # totNum = (numTomo2+newRDPNum)
+            # if (abs(totNum/numNew)<.3):
+                # break
+            # delta = 0.8*(numTomo2+newRDPNum)/(newDenRDP + tomoDenC)
+            # if ((delta+inSS)<0):
+                # break
+            # inSS += delta
+            # print('\t curSS : {:.2e} delta: {:.2e} prev {:.2e} numTomo {:.2e} numRDP {:.2e}'.format(inSS, \
+            # delta,inSS-delta,numTomo2,newRDPNum))
+            # if (abs(delta/inSS)<0.05):
+                 # break
+        
+
+    #    tomoNum0 = self.subFactor * (self.llTomo.gradient(self.x).dot(self.sDirSTIR))
+    #    subF = 20
+     #   tomoNum1 = self.subFactor * self.llTomo.gradient(self.x.sapyb(1,self.sDirSTIR,inSS/subF).maximum(0)).dot(self.sDirSTIR)
+    #    while (abs(tomoNum1/tomoNum0-1)<0.01):
+    #        subF *=.1
+    #        tomoNum1 = self.subFactor * self.llTomo.gradient(self.x.sapyb(1,self.sDirSTIR,inSS/subF).maximum(0)).dot(self.sDirSTIR)
+    #        print('doubled subF')
+    #        
+    #    tomoDen2 = (tomoNum0-tomoNum1)*subF/inSS
+        
+    # #   print('Den True={:.1e} Den App = {:.1e} Den New = {:.1e}'.format(tomoDenTrue,tomoDen,tomoDen2))
+    # #   print ('t0 = {:.1e} t1 = {:.1e}'.format(tomoNum0,tomoNum1))
+
+        
       #  ssString = 'New step size: num = {:.1e} rdpDen = {:.1e} tomoDen = {:.1e} trueTomo = {:.1e} tomoBis = {:.1e} stepSize = {:.1e}'
         
-        stepSize = (numNew)/(tomoDen+newDenRDP)
-        ssString = 'New step size: num = {:.1e} rdpDen = {:.1e} tomoDen = {:.1e} stepSize = {:.1e}'
-        print(ssString.format(numNew,newDenRDP,tomoDen,stepSize))
-        #print(ssString.format(numNew,newDenRDP,tomoDen,tomoDenTrue,tomoDenBis,stepSize))
-        if (stepSize<0):
-            print('neg step size')
-            stepSize = abs(stepSize*.1) 
-
-       # if ((newDenRDP/tomoDen)>20):
+    #    stepSize = (numNew)/(tomoDen2+newDenRDP)
+    #    newNumRDP = -self.sDirSTIR.dot(self.data.prior.gradient(self.x))
+    #    
+    #    inSS = stepSize/2
+ #       if (subF< 20) and (newNumRDP<(0.1*tomoNum0)) and (tomoDen2>newDenRDP):
+ #           inSS = (numNew/(tomoDen+newDenRDP) /subF)
+        
+    #    ssString = 'New step size: num = {:.1e}, tomoNum0 = {:.2e}, numRDP = {:.2e} rdpDen = {:.1e} tomoDen = {:.1e} stepSize = {:.1e} inSS = {:.1e}'
+    #    print(ssString.format(numNew,tomoNum0,newNumRDP,newDenRDP,tomoDen,stepSize,inSS)) 
+ 
+    #    oldSS = 0
+    #    oldTarget = stepSize
+    #    oldNum = tomoNum0 + newNumRDP
+    #    for dummy in range(10):
+    #        newNumT = self.subFactor *  self.llTomo.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)).dot(self.sDirSTIR)
+    #        newRDPNum = -self.sDirSTIR.dot(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0))
+    #        totNum = (newNumT+newRDPNum)
+#
+#            delta = totNum* (-inSS + oldSS)/(totNum-oldNum)
+#            oldNum = totNum
+#            oldSS = inSS
+#            inSS += delta/2
+#            if (abs((oldSS + delta)/(oldTarget)-1)<.3):
+#                inSS = oldSS + delta
+#            oldTarget = inSS + delta
+#            print ('newSS =  {:.2e}, numT = {:.2e}, numRDP = {:.2e}, tot = {:.2e} '.format(inSS,newNumT,newRDPNum,totNum))
+#            if (abs(delta/inSS)<.1):
+#                break
+#            
+#            
+##        
+ #       #print(ssString.format(numNew,newDenRDP,tomoDen,tomoDenTrue,tomoDenBis,stepSize))
+#        if (stepSize<0):
+ #           print('neg step size')
+#            stepSize = abs(stepSize*.1) 
+#
+#       # if ((newDenRDP/tomoDen)>20):
             ## compute step size only varying numRDP
-        rdpNum = -self.sDirSTIR.dot(self.data.prior.gradient(self.x))
-        tomoNum = numNew-rdpNum
-        print('rdpNum = {:.1e} TomoNum = {:.1e}'.format(rdpNum,tomoNum))
-        inSS = stepSize #*2
-        xc = inSS
-        xa = 0
-        # search teh maximum
-        for dummy in range(4):
-            rdpNum = -self.sDirSTIR.dot(self.data.prior.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)))
-            tomoNum = self.subFactor*(self.llTomo.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)).dot(self.sDirSTIR))
-         #   print('rdp num={:.1e}'.format(rdpNum))
-            if (rdpNum>(-tomoNum)):
-                xc = (inSS*2)
-                xa = (inSS*0.5)
-                inSS*=2
-                print('doubled SS')
-            else:
-           #     xc = inSS
-                break
-        inSS = (xa+xc)/2
-#           print('xc = {:.1e} xa = {:.1e}'.format(xc,xa))
-        for bisIt in range(10):
-            rdpNum = -self.sDirSTIR.dot(self.data.prior.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)))
-            tomoNum = self.subFactor*(self.llTomo.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)).dot(self.sDirSTIR))
-            if (rdpNum>(-tomoNum)):
-                xa = inSS
-                inSS = (xc+inSS)/2
-            else:
-                xc = inSS
-                inSS = (xa+inSS)/2
-            ssString = '\t Loop ss: tomoNum = {:.1e},  rdpNum = {:.1e}, nextStepSize = {:.1e}'
-            print(ssString.format(tomoNum,rdpNum,inSS)) #, end='\t')     
-#            print('xc = {:.1e} xa = {:.1e}'.format(xc,xa))
-            if ((xc/xa-1)<.05):
-                break
+#        rdpNum = -self.sDirSTIR.dot(self.data.prior.gradient(self.x))
+#        tomoNum = numNew-rdpNum
+#        print('rdpNum = {:.1e} TomoNum = {:.1e}'.format(rdpNum,tomoNum))
+ #       inSS = stepSize #*2
+ #       xc = inSS
+ #       xa = 0
+#        # search teh maximum
+ #       for dummy in range(10):
+#            rdpNum = -self.sDirSTIR.dot(self.data.prior.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)))
+#       #     tomoNum = self.subFactor*(self.llTomo.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)).dot(self.sDirSTIR))
+#            wholeNum = (self.ll.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)).dot(self.sDirSTIR))
+#            print('rdp num={:.1e}, tomoNum={:.1e}, totNum={:.1e}'.format(rdpNum,tomoNum,tomoNum+rdpNum))
+#            #if (rdpNum>(-tomoNum)):
+#            if (wholeNum>0):
+#                xc = (inSS*2)
+#                xa = (inSS*0.5)
+#                inSS*=2
+#                print('doubled SS')
+#            else:
+#           #     xc = inSS
+#                break
+#        inSS = (xa+xc)/2
+##           print('xc = {:.1e} xa = {:.1e}'.format(xc,xa))
+ #       for bisIt in range(10):
+ #          # rdpNum = -self.sDirSTIR.dot(self.data.prior.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)))
+ #         #  tomoNum = (self.llTomo.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)).dot(self.sDirSTIR))
+ #           wholeNum = (self.ll.gradient(self.x.sapyb(1,self.sDirSTIR,inSS).maximum(0)).dot(self.sDirSTIR))
+ #           if (wholeNum<0):
+ #         # if (rdpNum>(-tomoNum)):
+ #               xa = inSS
+ #               inSS = (xc+inSS)/2
+ #           else:
+ #               xc = inSS
+ #               inSS = (xa+inSS)/2
+ #           ssString = '\t Loop ss: tomoNum = {:.1e},  rdpNum = {:.1e}, nextStepSize = {:.1e}'
+ #           print(ssString.format(tomoNum,rdpNum,inSS)) #, end='\t')     
+##            print('xc = {:.1e} xa = {:.1e}'.format(xc,xa))
+ #           if ((xc/xa-1)<.05):
+ #               break
             
         # else:
             # inSS = stepSize
@@ -352,7 +447,7 @@ class Submission (Algorithm):
         px = self.x.copy()
         self.x.sapyb(1,self.sDirSTIR,inSS,out=self.x) #    += (sDir) #*self.mask)
         self.x.maximum(0, out=self.x)
-      #  self.prevSDir = (self.x - px).as_array()
+ #       self.prevSDir = (self.x - px).as_array()
         self.immArr = self.x.as_array()
 
         
