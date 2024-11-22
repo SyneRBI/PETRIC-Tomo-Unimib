@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/final")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/geWeight_DiagConjQuad_noNPix")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -65,8 +65,8 @@ class SaveIters(Callback):
         self.csv.writerow(("iter", "objective"))
 
     def __call__(self, algo: Algorithm):
-#        if algo.iteration==0:
-#            algo.prec.write(str(self.outdir / 'prec.hv'))
+        if algo.iteration==0:
+            algo.data.prior.get_kappa().write(str(self.outdir / 'myKappa.hv'))
         if not self.skip_iteration(algo):
             log.debug("saving iter %d...", algo.iteration)
             algo.x.write(str(self.outdir / f'iter_{algo.iteration:04d}.hv'))
@@ -148,7 +148,7 @@ class QualityMetrics(ImageQualityCallback, Callback):
 
 class MetricsWithTimeout(cil_callbacks.Callback):
     """Stops the algorithm after `seconds`"""
-    def __init__(self, seconds=100, outdir=OUTDIR, transverse_slice=None, coronal_slice=None, **kwargs):
+    def __init__(self, seconds=300, outdir=OUTDIR, transverse_slice=None, coronal_slice=None, **kwargs):
         super().__init__(**kwargs)
         self._seconds = seconds
         self.callbacks = [
@@ -249,18 +249,18 @@ def get_data(srcdir=".", outdir=OUTDIR, sirf_verbosity=0):
 if SRCDIR.is_dir():
     # create list of existing data
     # NB: `MetricsWithTimeout` initialises `SaveIters` which creates `outdir`
-    data_dirs_metrics = [#(SRCDIR / "Siemens_mMR_NEMA_IQ", OUTDIR / "mMR_NEMA",
-                         # [MetricsWithTimeout(outdir=OUTDIR / "mMR_NEMA", transverse_slice=72, coronal_slice=109)]),
-                        #  (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
-                        #   [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
-                        #  (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
-                       #  [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
-                       #  (SRCDIR / "Mediso_NEMA_IQ", OUTDIR / "Mediso_IQ",
-                        # [MetricsWithTimeout(outdir=OUTDIR / "Mediso_IQ")]),
-                       #  (SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
-                       #  [MetricsWithTimeout(outdir=OUTDIR / "IQ_lowcounts")]),
+    data_dirs_metrics = [(SRCDIR / "Siemens_mMR_NEMA_IQ", OUTDIR / "mMR_NEMA",
+                         [MetricsWithTimeout(outdir=OUTDIR / "mMR_NEMA", transverse_slice=72, coronal_slice=109)]),
+                         (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
+                         [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
+                         (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
+                          [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
+                        # (SRCDIR / "Mediso_NEMA_IQ", OUTDIR / "Mediso_IQ",
+                        #[MetricsWithTimeout(outdir=OUTDIR / "Mediso_IQ")]),
+                         (SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
+                          [MetricsWithTimeout(outdir=OUTDIR / "IQ_lowcounts")]),
                          (SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
-                          [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
+                         [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
 else:
     log.warning("Source directory does not exist: %s", SRCDIR)
     data_dirs_metrics = [(None, None, [])] # type: ignore

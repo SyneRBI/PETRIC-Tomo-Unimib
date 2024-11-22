@@ -27,8 +27,8 @@ class Submission (Algorithm):
     def __init__(self, data, **kwargs):
 
         self.x = data.OSEM_image
-        # tImmArr = self.x.as_array()
-        # tImmArrSm = ndi.gaussian_filter(tImmArr,1.2)
+        tImmArr = self.x.as_array()
+        tImmArrSm = ndi.gaussian_filter(tImmArr,0.8)
         # tempEps = tImmArrSm.max()*5e-3
         # mask1 = tImmArrSm>(0.5*tempEps)
         # mask1 = ndi.binary_dilation(mask1,iterations=3)
@@ -37,7 +37,7 @@ class Submission (Algorithm):
         # tImmArr[tImmArr<tempEps]=0
         # tImmArr = ndi.gaussian_filter(tImmArr,.3)
         
-        # self.x.fill(tImmArr)
+        self.x.fill(tImmArrSm)
         self.immArr = 0
         epsCorr = data.additive_term.max()*1e-6
         self.epsCorrSino = epsCorr
@@ -46,41 +46,66 @@ class Submission (Algorithm):
         acq_model = STIR.AcquisitionModelUsingParallelproj()
         acq_model.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors))
         acq_model.set_additive_term(data.additive_term)
+    #    print('about to set up acq_mod')
         acq_model.set_up(data.acquired_data, self.x)
+    #    print('acq_mod')
         self.full_model = acq_model
         self.lin_model = acq_model.get_linear_acquisition_model()
         
-        self.ll = STIR.make_Poisson_loglikelihood(data.acquired_data,acq_model=acq_model)
-        self.ll.set_prior(self.data.prior)
-        self.ll.set_up(self.x)
+        print('set up log lik')
         
         nAngles = data.acquired_data.dimensions()[2]
-        nSSAng = 4
+        nSSAng = 6
         self.subFactor = nAngles/nSSAng
         usedAngles = [(x*nAngles)//nAngles for x in range(nSSAng)] #, nAngles//3, (nAngles)//2, (2*nAngles)//3, (5*nAngles)//6 ]
         acqModSS = STIR.AcquisitionModelUsingParallelproj()
         acqModSS.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors.get_subset(usedAngles)))
         acqModSS.set_additive_term(data.additive_term.get_subset(usedAngles))
+    #    print('about to set up acqModSS')
         acqModSS.set_up(data.acquired_data.get_subset(usedAngles),self.x)
+    #    print('set up acqMod SS')
         self.acqModSS = acqModSS
-  #      self.llTomo = STIR.make_Poisson_loglikelihood(data.acquired_data.get_subset(usedAngles),acq_model = acqModSS)
-   #     self.redData = data.acquired_data.get_subset(usedAngles).as_array()
-   #     self.redAdd = data.additive_term.get_subset(usedAngles).as_array()
-   #     self.llTomo.set_up(self.x)
-        
-  #      self.subTomoFull = self.llTomo.clone()
       
         ybar = acq_model.forward(self.x)
-        fp1 = acq_model.forward(self.x.get_uniform_copy(1))
         self.prec = self.x.get_uniform_copy(0)
         
-        self.precTomo = acq_model.backward(fp1/ybar).as_array()
-        
-        self.kappaArr = self.data.prior.get_kappa().as_array()
+        #fp1 = self.lin_model.forward(self.x.get_uniform_copy(1))
+#        self.precTomo = acq_model.backward(self.data.mult_factors/ybar).as_array()*self.x.dimensions()[1]
+        self.precTomo = acq_model.backward(self.data.mult_factors/ybar).as_array()
+#        self.precTomo = acq_model.backward(fp1/ybar).as_array()
+        newKappa = acq_model.backward(ybar.get_uniform_copy(1))
+        newKarr = newKappa.as_array()
+        newKprof = np.mean(np.mean(newKarr,axis=2),axis=1)
+        nz = self.x.dimensions()[0]
+        zv = np.arange(-(nz-1)/2,(nz+1)/2)
+        zv = np.abs(zv)
+        zv[zv<0.5]=0.5
+        zv = 0.5 + 0.5*( 1-zv/((nz-1)/2))
+        zv = zv.reshape((nz,1,1))
+        newKprof = newKprof.reshape((nz,1,1))
+        zv = zv/newKprof
+        newKarr = newKarr*zv
+        kernel = np.ones((3,))/3
+        newKarr = ndi.convolve1d(newKarr,kernel,axis=0,mode='constant')
+        newKarr *=4.4
+        newKarr *=100
+        newKarr *=700
+        newKarr = np.sqrt(newKarr)
+        print ('beta Fact='+ str(self.data.prior.get_penalisation_factor())) 
+
+
+        kappa = self.data.prior.get_kappa()
+        self.kappaArr = newKarr
+    #    print('done second bp')
+        kappa.fill(newKarr)
+        self.data.prior.set_kappa(kappa)
+        self.data.prior.set_up(self.x)
+        self.ll = STIR.make_Poisson_loglikelihood(data.acquired_data,acq_model=acq_model)
+        self.ll.set_prior(self.data.prior)
+        self.ll.set_up(self.x)
+    #    print('set new k')
        
         precArr = self.precTomo
-#        self.kappaArr = np.sqrt(precArr) #*np.sqrt(precArr.shape[1])
-        #precArr = self.kappaArr.copy()
         mask = (precArr>1)
         precArr += self.rdp_hess_diag()
         
@@ -99,19 +124,16 @@ class Submission (Algorithm):
        # self.prec.write('prec.hv')
        #
         self.prec.fill((mask/precDil))
+        self.precArr = np.sqrt(1/precDil)
  #       self.prec.write('prec.hv')
        # self.prec.
 
-        # mask = 1 - (precArr<1)
-        # self.mask = mask
-        # self.maskStir = self.x.get_uniform_copy(0).fill(mask)
-
-        # self.x.fill(self.x.as_array()*mask)
         
         self.immArr = self.x.as_array()
         self.sDirSTIR = self.x.get_uniform_copy(0)
         self.prevGrad =self.x.get_uniform_copy(0)
         self.prevSDir = self.x.get_uniform_copy(0)
+        self.makeFFT_2D_filter()
         super().__init__()
         self.configured = True       
     
@@ -240,20 +262,30 @@ class Submission (Algorithm):
 ## Calcolare denominatore tomografico approssimato con filtro?  
 
         grad = self.ll.gradient(self.x)
+        sDir = grad.as_array()*self.precArr
+        #sDir = np.fft.fft2(sDir,axes=(1,2))
+        #sDir *= self.FFTFilter
+        #sDir = np.real(np.fft.ifft2(sDir,axes=(1,2)))
+        sDir *= self.precArr
+        self.sDirSTIR.fill(sDir)
     #    grad.write('grad.hv')
-        self.sDirSTIR = (grad*self.prec)
+#        self.sDirSTIR = (grad*self.prec)
    #     self.sDirSTIR.write('sDir.hv')
         if (self.iteration>0):
-            if (self.iteration>3):
+         #   if (self.iteration>3):
             #    print('doing beta')
-                beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
-                beta = max(0,beta)
-            else:
+            beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
+            beta = max(0,beta)
+         #   else:
             #    print ('doing beta quad')
-                beta = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
+            beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
+       #     print ('beta = {:.2e}, beta2 = {:.2e}'.format(beta,beta2))
+        #    print ('sDir Norm = {:.2e}, prevS Norm = {:.2e}'.format(self.sDirSTIR.norm(),self.prevSDir.norm()))
+           #     if ((self.iteration % 15)==0):
+            #        beta = 0
             
             
-            self.sDirSTIR.sapyb(1,self.prevSDir,beta)
+            self.sDirSTIR.sapyb(1,self.prevSDir,beta2,out=self.sDirSTIR)
         self.prevSDir = self.sDirSTIR.clone()
         self.prevGrad = grad.clone()
     
@@ -268,8 +300,10 @@ class Submission (Algorithm):
     #    print('numNew{:.2e} tomoDen{:.2e} newRDP {:.2e}'.format(numNew,tomoDenC,newDenRDP))
         inSS = numNew/(tomoDenC+newDenRDP)
  
+       # xOld =self.x.clone()
         self.x.sapyb(1,self.sDirSTIR,inSS,out=self.x) 
         self.x.maximum(0, out=self.x)
+        #self.prevSDir = self.x-xOld
         self.immArr = self.x.as_array()
 
         
