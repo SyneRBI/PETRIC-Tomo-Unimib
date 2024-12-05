@@ -37,9 +37,10 @@ class Submission (Algorithm):
         # tImmArr[tImmArr<tempEps]=0
         # tImmArr = ndi.gaussian_filter(tImmArr,.3)
         
-        self.x.fill(tImmArrSm)
+#        self.x.fill(tImmArrSm)
         self.immArr = 0
         epsCorr = data.additive_term.max()*1e-6
+        #self.addCorrPad = epsCorr*1e3
         self.epsCorrSino = epsCorr
         data.additive_term+=epsCorr
         self.data = data
@@ -51,6 +52,8 @@ class Submission (Algorithm):
     #    print('acq_mod')
         self.full_model = acq_model
         self.lin_model = acq_model.get_linear_acquisition_model()
+        self.addCorrThr = data.additive_term*data.mult_factors
+        self.addCorrThr +=epsCorr
         
         print('set up log lik')
         
@@ -61,6 +64,8 @@ class Submission (Algorithm):
         acqModSS = STIR.AcquisitionModelUsingParallelproj()
         acqModSS.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors.get_subset(usedAngles)))
         acqModSS.set_additive_term(data.additive_term.get_subset(usedAngles))
+        #self.addSS = data.additive_term.get_subset(usedAngles).as_array()*(data.mult_factors.get_subset(usedAngles).as_array())
+        self.addSS = self.addCorrThr.get_subset(usedAngles)
     #    print('about to set up acqModSS')
         acqModSS.set_up(data.acquired_data.get_subset(usedAngles),self.x)
     #    print('set up acqMod SS')
@@ -101,7 +106,7 @@ class Submission (Algorithm):
         self.data.prior.set_kappa(kappa)
         self.data.prior.set_up(self.x)
         self.ll = STIR.make_Poisson_loglikelihood(data.acquired_data,acq_model=acq_model)
-        self.ll.set_prior(self.data.prior)
+  #      self.ll.set_prior(self.data.prior)
         self.ll.set_up(self.x)
     #    print('set new k')
        
@@ -113,18 +118,23 @@ class Submission (Algorithm):
                           [1, 1, 1],
                           [0, 1, 0]]).astype(bool)
         structuring_element = structuring_element.reshape((1,3,3))  
+        inMask = ndi.binary_erosion(mask,structure=structuring_element)
         precDil = precArr.copy()                        
         for _ in range(22):
             precDil = ndi.grey_dilation(precDil,structure=structuring_element)
-            precDil[mask] = precArr[mask]
+            precDil[inMask] = precArr[inMask]
         
 
         precDil += 1e-5
+        mask = ndi.binary_erosion(mask,structure=structuring_element,iterations=2)
+       
+        self.mask = mask
+        np.save ('mask.npy',self.mask)
         self.prec.fill(precDil)
        # self.prec.write('prec.hv')
        #
-        self.prec.fill((mask/precDil))
         self.precArr = np.sqrt(1/precDil)
+        self.prec.fill(self.precArr)
  #       self.prec.write('prec.hv')
        # self.prec.
 
@@ -136,6 +146,33 @@ class Submission (Algorithm):
         self.makeFFT_2D_filter()
         super().__init__()
         self.configured = True       
+    
+    def rdp_grad (self):
+        inpImm_ = self.x.as_array()
+        kappa_ = self.kappaArr
+        rdpG_ = np.zeros_like(inpImm_)
+        eps_ = self.data.prior.get_epsilon()
+        beta_ = self.data.prior.get_penalisation_factor()
+        pixS_ = self.x.voxel_sizes()        
+        for xs in range(-1,2):
+            for ys in range (-1,2):
+                for zs in range(-1,2):
+                    if (xs == 0) and (ys==0) and (zs==0): 
+              #          print('continuing')
+                        continue
+                    shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))
+                    sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
+                    if zs==-1:
+                        shiftImm_[-1,:,:]= inpImm_[-1,:,:]
+                    if zs==1:
+                        shiftImm_[0,:,:] = inpImm_[0,:,:]
+
+                    tempW = pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)             
+                    rdpG_ += tempW*(inpImm_ - shiftImm_)*(inpImm_ + 3 * shiftImm_ + 2* eps_ + 2* np.abs(inpImm_-shiftImm_)) \
+                    /(np.abs(inpImm_)+ np.abs(shiftImm_) + 2*np.abs(inpImm_-shiftImm_ )+eps_)** 2 
+                    
+        rdpG_ *= beta_
+        return rdpG_
     
     def makeFFT_2D_filter (self):
         d_ = .95
@@ -195,7 +232,8 @@ class Submission (Algorithm):
     
     def rdp_hess_diag (self):
         inpImm_ = ndi.gaussian_filter(self.x.as_array(),1.3)
-        kappa_ = ndi.gaussian_filter(self.kappaArr,1.1)
+    #    kappa_ = ndi.gaussian_filter(self.kappaArr,1.1)
+        kappa_ = self.kappaArr
         rdpG_ = np.zeros_like(inpImm_)
         eps_ = self.data.prior.get_epsilon()
         beta_ = self.data.prior.get_penalisation_factor()
@@ -224,7 +262,7 @@ class Submission (Algorithm):
               
         ssDen = 0
         inpImm_ = self.immArr+alpha_*sDir_
-        inpImm_[inpImm_<0]=0
+   #     inpImm_[inpImm_<0]=0
         kappa_ = self.kappaArr
 
         eps_ = self.data.prior.get_epsilon()
@@ -247,7 +285,7 @@ class Submission (Algorithm):
                     if zs==1:
                         shiftImm_[0,:,:] = inpImm_[0,:,:]
                         shiftSI_[0,:,:] = sDir_[0,:,:]
-                    wI = 1/(inpImm_+ shiftImm_ + 2 * np.abs(inpImm_-shiftImm_) + eps_)**3
+                    wI = 1/(np.abs(inpImm_)+ np.abs(shiftImm_) + 2 * np.abs(inpImm_-shiftImm_) + eps_)**3
                     wI *= (kappa_*sk_ )
                     wI *= ((2*shiftImm_+eps_)**2 *  sDir_**2 -(2*inpImm_+eps_)*(2*shiftImm_+eps_)*sDir_*shiftSI_)
                     
@@ -257,16 +295,32 @@ class Submission (Algorithm):
 
     
     def update(self):
-
+#        print('entrato in update')
 ## Mettere la log likelihood al posto che gradienti manuali
 ## Calcolare denominatore tomografico approssimato con filtro?  
 
-        grad = self.ll.gradient(self.x)
-        sDir = grad.as_array()*self.precArr
-        #sDir = np.fft.fft2(sDir,axes=(1,2))
-        #sDir *= self.FFTFilter
-        #sDir = np.real(np.fft.ifft2(sDir,axes=(1,2)))
+       # grad = self.ll.gradient(self.x)
+        capFact = 2.5/(5+(self.iteration/10)**2)
+        yBar = self.full_model.forward(self.x)
+        gradNum = self.data.acquired_data-yBar
+        gradDen = yBar.maximum(self.addCorrThr*capFact)
+        grad = self.full_model.backward(gradNum/gradDen)
+       # (gradNum/gradDen).write('sinRat.hs')
+       # grad.write('sinGrad.hv')
+        #yBar.write('ybar.hs')
+        gradPrior = self.rdp_grad()
+        
+        gradArr = grad.as_array()-gradPrior
+     #   print ('there are {} NaN in the sinogram'.format(gradArr[np.isnan(gradArr)].size))
+        grad.fill(gradArr)
+        
+        sDir = gradArr*self.precArr #grad.as_array()*self.precArr
+        sDir = np.fft.fft2(sDir,axes=(1,2))
+        sDir *= self.FFTFilter
+        sDir = np.real(np.fft.ifft2(sDir,axes=(1,2)))
+        gradArr = ndi.gaussian_filter(gradArr,(0.4,0,0))
         sDir *= self.precArr
+        sDir *= self.mask
         self.sDirSTIR.fill(sDir)
     #    grad.write('grad.hv')
 #        self.sDirSTIR = (grad*self.prec)
@@ -279,36 +333,33 @@ class Submission (Algorithm):
          #   else:
             #    print ('doing beta quad')
             beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
-       #     print ('beta = {:.2e}, beta2 = {:.2e}'.format(beta,beta2))
-        #    print ('sDir Norm = {:.2e}, prevS Norm = {:.2e}'.format(self.sDirSTIR.norm(),self.prevSDir.norm()))
-           #     if ((self.iteration % 15)==0):
-            #        beta = 0
             
-            
-            self.sDirSTIR.sapyb(1,self.prevSDir,beta2,out=self.sDirSTIR)
+       #     self.sDirSTIR.sapyb(1,self.prevSDir,beta2,out=self.sDirSTIR)
         self.prevSDir = self.sDirSTIR.clone()
         self.prevGrad = grad.clone()
     
        
         ybar2 = self.acqModSS.forward(self.x)
         fpSD2 = self.acqModSS.get_linear_acquisition_model().forward(self.sDirSTIR)
-        tomoDenC = self.subFactor* fpSD2.dot(fpSD2/ybar2)
+        tomoDenC = self.subFactor* fpSD2.dot(fpSD2/ybar2.maximum(self.addSS*capFact))
         
         numNew = self.sDirSTIR.dot(grad)
         newDenRDP = self.rdp_den_exact(self.sDirSTIR.as_array())
+        
 
-    #    print('numNew{:.2e} tomoDen{:.2e} newRDP {:.2e}'.format(numNew,tomoDenC,newDenRDP))
+        print('numNew{:.2e} tomoDen{:.2e} newRDP {:.2e}'.format(numNew,tomoDenC,newDenRDP))
         inSS = numNew/(tomoDenC+newDenRDP)
- 
+        
        # xOld =self.x.clone()
         self.x.sapyb(1,self.sDirSTIR,inSS,out=self.x) 
-        self.x.maximum(0, out=self.x)
+       # self.x.maximum(0, out=self.x)
         #self.prevSDir = self.x-xOld
         self.immArr = self.x.as_array()
+      #  print ('there are {} NaNs in the image'.format(self.immArr[np.isnan(self.immArr)].size))
 
         
     def update_objective(self):
         return 0
         
          #   ssTomo = ssNum/ssDen
-submission_callbacks = [MaxIteration(660)]
+submission_callbacks = [MaxIteration(1)]
