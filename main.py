@@ -61,6 +61,7 @@ class Submission (Algorithm):
         nSSAng = 6
         self.subFactor = nAngles/nSSAng
         usedAngles = [(x*nAngles)//nAngles for x in range(nSSAng)] #, nAngles//3, (nAngles)//2, (2*nAngles)//3, (5*nAngles)//6 ]
+        self.ssAng = usedAngles
         acqModSS = STIR.AcquisitionModelUsingParallelproj()
         acqModSS.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors.get_subset(usedAngles)))
         acqModSS.set_additive_term(data.additive_term.get_subset(usedAngles))
@@ -139,6 +140,7 @@ class Submission (Algorithm):
        # self.prec.
 
         
+        self.x = self.x.get_uniform_copy(0)
         self.immArr = self.x.as_array()
         self.sDirSTIR = self.x.get_uniform_copy(0)
         self.prevGrad =self.x.get_uniform_copy(0)
@@ -175,7 +177,7 @@ class Submission (Algorithm):
         return rdpG_
     
     def makeFFT_2D_filter (self):
-        d_ = .95
+        d_ = .65
         imShape_ = self.x.shape
         tRes_ = 0
         # find TOF res
@@ -300,7 +302,7 @@ class Submission (Algorithm):
 ## Calcolare denominatore tomografico approssimato con filtro?  
 
        # grad = self.ll.gradient(self.x)
-        capFact = 2.5/(5+(self.iteration/10)**2)
+        capFact = 2.5/(5+(self.iteration/20)**2)
         yBar = self.full_model.forward(self.x)
         gradNum = self.data.acquired_data-yBar
         gradDen = yBar.maximum(self.addCorrThr*capFact)
@@ -315,17 +317,18 @@ class Submission (Algorithm):
         grad.fill(gradArr)
         
         sDir = gradArr*self.precArr #grad.as_array()*self.precArr
-        sDir = np.fft.fft2(sDir,axes=(1,2))
-        sDir *= self.FFTFilter
-        sDir = np.real(np.fft.ifft2(sDir,axes=(1,2)))
-        gradArr = ndi.gaussian_filter(gradArr,(0.4,0,0))
+        if (self.iteration>0):
+            sDir = np.fft.fft2(sDir,axes=(1,2))
+            sDir *= self.FFTFilter
+            sDir = np.real(np.fft.ifft2(sDir,axes=(1,2)))
+#            gradArr = ndi.gaussian_filter(gradArr,(0.4,0,0))
         sDir *= self.precArr
         sDir *= self.mask
         self.sDirSTIR.fill(sDir)
     #    grad.write('grad.hv')
 #        self.sDirSTIR = (grad*self.prec)
    #     self.sDirSTIR.write('sDir.hv')
-        if (self.iteration>0):
+        if (self.iteration>1):
          #   if (self.iteration>3):
             #    print('doing beta')
             beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
@@ -333,13 +336,14 @@ class Submission (Algorithm):
          #   else:
             #    print ('doing beta quad')
             beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
+            if (self.iteration==2):
+                beta2=0
             
-       #     self.sDirSTIR.sapyb(1,self.prevSDir,beta2,out=self.sDirSTIR)
+            self.sDirSTIR.sapyb(1,self.prevSDir,beta,out=self.sDirSTIR)
         self.prevSDir = self.sDirSTIR.clone()
         self.prevGrad = grad.clone()
     
-       
-        ybar2 = self.acqModSS.forward(self.x)
+        ybar2 = yBar.get_subset(self.ssAng)  #self.acqModSS.forward(self.x)
         fpSD2 = self.acqModSS.get_linear_acquisition_model().forward(self.sDirSTIR)
         tomoDenC = self.subFactor* fpSD2.dot(fpSD2/ybar2.maximum(self.addSS*capFact))
         
@@ -347,10 +351,17 @@ class Submission (Algorithm):
         newDenRDP = self.rdp_den_exact(self.sDirSTIR.as_array())
         
 
-        print('numNew{:.2e} tomoDen{:.2e} newRDP {:.2e}'.format(numNew,tomoDenC,newDenRDP))
         inSS = numNew/(tomoDenC+newDenRDP)
-        
-       # xOld =self.x.clone()
+        print('numNew{:.2e} tomoDen{:.2e} newRDP {:.2e} inSS{:.2e}'.format(numNew,tomoDenC,newDenRDP,inSS))
+        if (self.iteration==0):
+            ySub = self.data.acquired_data.get_subset(self.ssAng)
+            for ssIdx in range(20):
+                yBarIt = ybar2+inSS*fpSD2
+                newNum = fpSD2.dot((-yBarIt+ySub)/yBarIt)
+                newDen = fpSD2.dot(fpSD2/yBarIt)
+                inSS += newNum/newDen
+                print(f'num loop{newNum:.2e} denLoop {newDen:.2e} ss {inSS:.2e}')
+
         self.x.sapyb(1,self.sDirSTIR,inSS,out=self.x) 
        # self.x.maximum(0, out=self.x)
         #self.prevSDir = self.x-xOld
@@ -362,4 +373,4 @@ class Submission (Algorithm):
         return 0
         
          #   ssTomo = ssNum/ssDen
-submission_callbacks = [MaxIteration(1)]
+submission_callbacks = [MaxIteration(660)]

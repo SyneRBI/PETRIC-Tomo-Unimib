@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/geWeight_Filt_newTest_uS")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/in00w_Filt_Neg_Diag")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -72,8 +72,6 @@ class SaveIters(Callback):
             log.debug("saving iter %d...", algo.iteration)
             algo.x.write(str(self.outdir / f'iter_{algo.iteration:04d}.hv'))
             #algo.maskStir.write(str(self.outdir / f'mask.hv'))
-            algo.prevSDir.write(str(self.outdir / f'sDir_{algo.iteration:04d}.hv'))
-            algo.prevGrad.write(str(self.outdir / f'grad_{algo.iteration:04d}.hv'))
             self.csv.writerow((algo.iteration, algo.get_last_loss()))
             log.debug("...saved")
         if algo.iteration == algo.max_iteration:
@@ -252,11 +250,11 @@ if SRCDIR.is_dir():
     # create list of existing data
     # NB: `MetricsWithTimeout` initialises `SaveIters` which creates `outdir`
     data_dirs_metrics = [(SRCDIR / "Siemens_mMR_NEMA_IQ", OUTDIR / "mMR_NEMA",
-                         [MetricsWithTimeout(outdir=OUTDIR / "mMR_NEMA", transverse_slice=72, coronal_slice=109)])] #,
-                         #(SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
-                         #[MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
-                         #(SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
-                         # [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
+                         [MetricsWithTimeout(outdir=OUTDIR / "mMR_NEMA", transverse_slice=72, coronal_slice=109)]),
+                         (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
+                         [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
+                         (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
+                          [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")])] #,
                         # (SRCDIR / "Mediso_NEMA_IQ", OUTDIR / "Mediso_IQ",
                         #[MetricsWithTimeout(outdir=OUTDIR / "Mediso_IQ")]),
                          #(SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
