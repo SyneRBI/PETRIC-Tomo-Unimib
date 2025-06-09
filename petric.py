@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/in00w_Filt_Neg_Diag")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/newSS_sPrec_diag_PR")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -71,6 +71,7 @@ class SaveIters(Callback):
         if not self.skip_iteration(algo):
             log.debug("saving iter %d...", algo.iteration)
             algo.x.write(str(self.outdir / f'iter_{algo.iteration:04d}.hv'))
+            algo.sDirSTIR.write(str(self.outdir / f'sDir_{algo.iteration:04d}.hv'))
             #algo.maskStir.write(str(self.outdir / f'mask.hv'))
             self.csv.writerow((algo.iteration, algo.get_last_loss()))
             log.debug("...saved")

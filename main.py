@@ -28,7 +28,7 @@ class Submission (Algorithm):
 
         self.x = data.OSEM_image
         tImmArr = self.x.as_array()
-        tImmArrSm = ndi.gaussian_filter(tImmArr,0.8)
+        tImmArrSm = ndi.gaussian_filter(tImmArr,1.9)
         # tempEps = tImmArrSm.max()*5e-3
         # mask1 = tImmArrSm>(0.5*tempEps)
         # mask1 = ndi.binary_dilation(mask1,iterations=3)
@@ -37,7 +37,7 @@ class Submission (Algorithm):
         # tImmArr[tImmArr<tempEps]=0
         # tImmArr = ndi.gaussian_filter(tImmArr,.3)
         
-#        self.x.fill(tImmArrSm)
+        self.x.fill(tImmArrSm)
         self.immArr = 0
         epsCorr = data.additive_term.max()*1e-6
         #self.addCorrPad = epsCorr*1e3
@@ -58,15 +58,17 @@ class Submission (Algorithm):
         print('set up log lik')
         
         nAngles = data.acquired_data.dimensions()[2]
-        nSSAng = 6
+        nSSAng = 22
         self.subFactor = nAngles/nSSAng
         usedAngles = [(x*nAngles)//nAngles for x in range(nSSAng)] #, nAngles//3, (nAngles)//2, (2*nAngles)//3, (5*nAngles)//6 ]
         self.ssAng = usedAngles
+        
         acqModSS = STIR.AcquisitionModelUsingParallelproj()
         acqModSS.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors.get_subset(usedAngles)))
         acqModSS.set_additive_term(data.additive_term.get_subset(usedAngles))
         #self.addSS = data.additive_term.get_subset(usedAngles).as_array()*(data.mult_factors.get_subset(usedAngles).as_array())
-        self.addSS = self.addCorrThr.get_subset(usedAngles)
+        self.addSS = self.addCorrThr.get_subset(usedAngles).as_array()
+        self.dataNP = self.data.acquired_data.get_subset(usedAngles).as_array()
     #    print('about to set up acqModSS')
         acqModSS.set_up(data.acquired_data.get_subset(usedAngles),self.x)
     #    print('set up acqMod SS')
@@ -114,6 +116,7 @@ class Submission (Algorithm):
         precArr = self.precTomo
         mask = (precArr>1)
         precArr += self.rdp_hess_diag()
+        precArr = ndi.gaussian_filter(precArr,(0.4,1.2,1.2))
         
         structuring_element = np.array([[0, 1, 0],
                           [1, 1, 1],
@@ -145,12 +148,13 @@ class Submission (Algorithm):
         self.sDirSTIR = self.x.get_uniform_copy(0)
         self.prevGrad =self.x.get_uniform_copy(0)
         self.prevSDir = self.x.get_uniform_copy(0)
+        self.ybar = self.addCorrThr.clone()
         self.makeFFT_2D_filter()
         super().__init__()
         self.configured = True       
     
-    def rdp_grad (self):
-        inpImm_ = self.x.as_array()
+    def rdp_grad (self,alpha_=0,sDir_=0):
+        inpImm_ = self.x.as_array()+alpha_*sDir_
         kappa_ = self.kappaArr
         rdpG_ = np.zeros_like(inpImm_)
         eps_ = self.data.prior.get_epsilon()
@@ -177,7 +181,7 @@ class Submission (Algorithm):
         return rdpG_
     
     def makeFFT_2D_filter (self):
-        d_ = .65
+        d_ = .8
         imShape_ = self.x.shape
         tRes_ = 0
         # find TOF res
@@ -189,6 +193,7 @@ class Submission (Algorithm):
         pixS_ = self.x.voxel_sizes()[1]
         
         order = 2*np.power(2,np.ceil(np.log2(imShape_[1]))).astype(np.uint32)
+        self.filtOrd = order
        # freqN = np.power(2,np.ceil(np.log2(imShape_[1]//2))).astype(np.uint32)
       #  print (order)
         freqN = order//2
@@ -209,27 +214,35 @@ class Submission (Algorithm):
         ftFilt = 2 * np.real(np.fft.fft(filtImpResp)) # check! when implemented correctly the imag part is zero within numerical precision
         ftFilt = ftFilt[:(freqN+1)]
         
+        # with oder 2x I have many more frequencies than I need.
+        
+        
         # Apply the shepp-logan window
-        fV = 2*np.pi*(np.arange(1,freqN+1))/imShape_[1]
-        ftFilt[1:] *= (np.sin(fV/(2*d_)) / (fV/(2*d_)))
+        fV = 2*np.pi*(np.arange(1,freqN+1))/order
+    #    ftFilt[1:] *= (np.sin(fV/(2*d_)) / (fV/(2*d_)))
+        ftFilt[1:] *= ((.54 + .46*np.cos(fV/d_))*(fV<(np.pi*d_)))
+        
+        
         ftFilt[ftFilt<0]=0
 
         # interpolate to 2D
-        xf = np.arange(0,imShape_[1]//2+1).reshape((1,imShape_[1]//2+1))
+        xf = np.arange(0,order//2+1).reshape((1,order//2+1))
         yf = xf.transpose()
         freqR = np.sqrt(xf**2+yf**2)
-        interpF = np.interp(freqR,nFreq,ftFilt,right=0)
-        if (imShape_[1]%2):
-            interpF = np.concatenate([interpF,interpF[-1:0:-1,:]],axis=0)
-            interpF = np.concatenate([interpF,interpF[:,-1:0:-1]],axis=1)
-            interpF = interpF.reshape((1,)+imShape_[1:])            
-        else:
-            interpF = np.concatenate([interpF,interpF[-2:0:-1,:]],axis=0)
-            interpF = np.concatenate([interpF,interpF[:,-2:0:-1]],axis=1)
-            interpF = interpF.reshape((1,)+imShape_[1:])
+        interpF = np.interp(freqR,nFreq,ftFilt,right=0) #ftFilt[-1])
+ #       if (imShape_[1]%2):
+ #           interpF = np.concatenate([interpF,interpF[-1:0:-1,:]],axis=0)
+ #           interpF = np.concatenate([interpF,interpF[:,-1:0:-1]],axis=1)
+ #           interpF = interpF.reshape((1,)+imShape_[1:])            
+ #       else:
+        interpF = np.concatenate([interpF,interpF[-2:0:-1,:]],axis=0)
+        interpF = np.concatenate([interpF,interpF[:,-2:0:-1]],axis=1)
+        interpF = interpF.reshape((1,order,order))
+        #interpF = interpF.reshape((1,)+imShape_[1:])
+        
         self.FFTFilter = interpF
-        self.invFilt = 1/interpF
-        self.invFilt /= self.invFilt[0,0,0]
+      #  self.invFilt = 1/interpF
+      #  self.invFilt /= self.invFilt[0,0,0]
  
     
     def rdp_hess_diag (self):
@@ -297,76 +310,76 @@ class Submission (Algorithm):
 
     
     def update(self):
-#        print('entrato in update')
-## Mettere la log likelihood al posto che gradienti manuali
-## Calcolare denominatore tomografico approssimato con filtro?  
 
-       # grad = self.ll.gradient(self.x)
         capFact = 2.5/(5+(self.iteration/20)**2)
-        yBar = self.full_model.forward(self.x)
-        gradNum = self.data.acquired_data-yBar
-        gradDen = yBar.maximum(self.addCorrThr*capFact)
+        gradNum = self.data.acquired_data-self.ybar
+        gradDen = self.ybar.maximum(self.addCorrThr*capFact)
         grad = self.full_model.backward(gradNum/gradDen)
-       # (gradNum/gradDen).write('sinRat.hs')
-       # grad.write('sinGrad.hv')
-        #yBar.write('ybar.hs')
         gradPrior = self.rdp_grad()
-        
         gradArr = grad.as_array()-gradPrior
-     #   print ('there are {} NaN in the sinogram'.format(gradArr[np.isnan(gradArr)].size))
         grad.fill(gradArr)
         
         sDir = gradArr*self.precArr #grad.as_array()*self.precArr
-        if (self.iteration>0):
-            sDir = np.fft.fft2(sDir,axes=(1,2))
-            sDir *= self.FFTFilter
-            sDir = np.real(np.fft.ifft2(sDir,axes=(1,2)))
-#            gradArr = ndi.gaussian_filter(gradArr,(0.4,0,0))
+       # if (self.iteration>0):
+            #            sDir = ndi.gaussian_filter(sDir,(0.4,0,0))
+          #  sDir = np.fft.fft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2))
+          #  print ('ftSDIR shape' +  str(sDir.shape))
+         #   sDir *= self.FFTFilter
+         #   print ('ft Filter' +  str(self.FFTFilter.shape))
+        #    sDir = np.real(np.fft.ifft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2)))
+       #     sDir = sDir[:,:self.immArr.shape[1],:self.immArr.shape[2]]
+          #  print ('inv FT shape' +  str(sDir.shape))
         sDir *= self.precArr
+        
+        if (self.iteration<1):
+            sDir = ndi.gaussian_filter(sDir,1)
         sDir *= self.mask
         self.sDirSTIR.fill(sDir)
-    #    grad.write('grad.hv')
-#        self.sDirSTIR = (grad*self.prec)
-   #     self.sDirSTIR.write('sDir.hv')
+
         if (self.iteration>1):
-         #   if (self.iteration>3):
-            #    print('doing beta')
             beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
             beta = max(0,beta)
-         #   else:
-            #    print ('doing beta quad')
             beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
-            if (self.iteration==2):
-                beta2=0
-            
             self.sDirSTIR.sapyb(1,self.prevSDir,beta,out=self.sDirSTIR)
         self.prevSDir = self.sDirSTIR.clone()
         self.prevGrad = grad.clone()
-    
-        ybar2 = yBar.get_subset(self.ssAng)  #self.acqModSS.forward(self.x)
-        fpSD2 = self.acqModSS.get_linear_acquisition_model().forward(self.sDirSTIR)
-        tomoDenC = self.subFactor* fpSD2.dot(fpSD2/ybar2.maximum(self.addSS*capFact))
+        sDir = self.sDirSTIR.as_array()
         
+        fpSD = self.lin_model.forward(self.sDirSTIR)
+        tomoDenC = fpSD.dot(fpSD/self.ybar.maximum(self.addCorrThr*capFact))
         numNew = self.sDirSTIR.dot(grad)
         newDenRDP = self.rdp_den_exact(self.sDirSTIR.as_array())
         
-
         inSS = numNew/(tomoDenC+newDenRDP)
-        print('numNew{:.2e} tomoDen{:.2e} newRDP {:.2e} inSS{:.2e}'.format(numNew,tomoDenC,newDenRDP,inSS))
+        print('\n numNew{:.2e} tomoDen{:.2e} newRDP {:.2e} inSS {:.2e}'.format(numNew,tomoDenC,newDenRDP,inSS))
         if (self.iteration==0):
-            ySub = self.data.acquired_data.get_subset(self.ssAng)
-            for ssIdx in range(20):
-                yBarIt = ybar2+inSS*fpSD2
-                newNum = fpSD2.dot((-yBarIt+ySub)/yBarIt)
-                newDen = fpSD2.dot(fpSD2/yBarIt)
+            for ssIdx in range(4):
+                yBarIt = self.ybar.sapyb(1,fpSD,inSS)
+                newNum = fpSD.dot((-yBarIt+self.data.acquired_data)/yBarIt)
+                newDen = fpSD.dot(fpSD/yBarIt.maximum(self.addCorrThr*capFact))
                 inSS += newNum/newDen
-                print(f'num loop{newNum:.2e} denLoop {newDen:.2e} ss {inSS:.2e}')
-
+                print(f'num loop: {newNum:.2e} denLoop {newDen:.2e} ss {inSS:.2e}')
+        else:
+            ybarNP = self.ybar.get_subset(self.ssAng).as_array()
+            addNP = self.addSS
+            #addNP = self.addCorrThr.get_subset(self.ssAng).as_array()
+            dataNP = self.dataNP #self.data.acquired_data.get_subset(self.ssAng).as_array()
+            fpNP = fpSD.get_subset(self.ssAng).as_array()
+            for ssIdx in range(5):
+                yBarIt = ybarNP+inSS*fpNP # self.ybar.sapyb(1,fpSD,inSS)
+                yBarDen = np.maximum(yBarIt,addNP)
+                newNum =  np.dot(fpNP.flat,((-yBarIt+dataNP)/yBarDen).flat) #fpSD.dot((-yBarIt+self.data.acquired_data)/yBarIt.maximum(self.addCorrThr*capFact))
+                newNum *= self.subFactor
+                newNumRDP = -np.dot(sDir.flat,self.rdp_grad(alpha_=inSS,sDir_=sDir).flat)
+                newDen = np.dot(fpNP.flat,(fpNP/yBarDen).flat) #fpSD.dot(fpSD/yBarIt.maximum(self.addCorrThr*capFact))
+                newDen *= self.subFactor
+                newDenRDP = self.rdp_den_exact(sDir,alpha_=inSS)
+                inSS += (newNum+newNumRDP)/(newDen+newDenRDP)
+                print(f'num loop={newNum:.2e} numRDP={newNumRDP:.2e} denLoop={newDen:.2e} denRDP={newDenRDP:.2e} ss={inSS:.2e}')               
+            
         self.x.sapyb(1,self.sDirSTIR,inSS,out=self.x) 
-       # self.x.maximum(0, out=self.x)
-        #self.prevSDir = self.x-xOld
+        self.ybar.sapyb(1,fpSD,inSS,out=self.ybar)
         self.immArr = self.x.as_array()
-      #  print ('there are {} NaNs in the image'.format(self.immArr[np.isnan(self.immArr)].size))
 
         
     def update_objective(self):
