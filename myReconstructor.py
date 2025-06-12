@@ -21,7 +21,6 @@ class myReconstructor():
         self.currRec = np.zeros_like(refImm)
     def fwdP__ (self,inpI_):
         inpI_ = ndi.gaussian_filter(inpI_,.7)
-     #   inpI_ *= mask__
         fp_ = radon(inpI_,theta=self.thetaV)
         return fp_
     def bkwP__ (self,bpS_):

@@ -28,19 +28,11 @@ class Submission (Algorithm):
 
         self.x = data.OSEM_image
         tImmArr = self.x.as_array()
-        tImmArrSm = ndi.gaussian_filter(tImmArr,1.9)
-        # tempEps = tImmArrSm.max()*5e-3
-        # mask1 = tImmArrSm>(0.5*tempEps)
-        # mask1 = ndi.binary_dilation(mask1,iterations=3)
-        # self.mask1 = ndi.gaussian_filter(mask1,2)
-        # tImmArr = ndi.gaussian_filter(tImmArr,.3)
-        # tImmArr[tImmArr<tempEps]=0
-        # tImmArr = ndi.gaussian_filter(tImmArr,.3)
+        tImmArrSm = ndi.gaussian_filter(tImmArr,0.7)
         
         self.x.fill(tImmArrSm)
-        self.immArr = 0
+        self.immArr = self.x.as_array()
         epsCorr = data.additive_term.max()*1e-6
-        #self.addCorrPad = epsCorr*1e3
         self.epsCorrSino = epsCorr
         data.additive_term+=epsCorr
         self.data = data
@@ -79,6 +71,7 @@ class Submission (Algorithm):
         
         #fp1 = self.lin_model.forward(self.x.get_uniform_copy(1))
 #        self.precTomo = acq_model.backward(self.data.mult_factors/ybar).as_array()*self.x.dimensions()[1]
+        self.ybar = ybar
         self.precTomo = acq_model.backward(self.data.mult_factors/ybar).as_array()
 #        self.precTomo = acq_model.backward(fp1/ybar).as_array()
         newKappa = acq_model.backward(ybar.get_uniform_copy(1))
@@ -115,40 +108,43 @@ class Submission (Algorithm):
        
         precArr = self.precTomo
         mask = (precArr>1)
-        precArr += self.rdp_hess_diag()
-        precArr = ndi.gaussian_filter(precArr,(0.4,1.2,1.2))
+        rdpPrec = self.rdp_hess_diag()
+        rdpPrec[rdpPrec<0]=0
+        rdpPrec = ndi.gaussian_filter(rdpPrec,(0,1,1))
+        precArr +=  rdpPrec#self.rdp_hess_diag()
+        # precArr = ndi.gaussian_filter(precArr,(0.4,1.2,1.2))
         
         structuring_element = np.array([[0, 1, 0],
                           [1, 1, 1],
                           [0, 1, 0]]).astype(bool)
         structuring_element = structuring_element.reshape((1,3,3))  
         inMask = ndi.binary_erosion(mask,structure=structuring_element)
-        precDil = precArr.copy()                        
-        for _ in range(22):
-            precDil = ndi.grey_dilation(precDil,structure=structuring_element)
-            precDil[inMask] = precArr[inMask]
+        # precDil = precArr.copy()                        
+        # for _ in range(22):
+        #     precDil = ndi.grey_dilation(precDil,structure=structuring_element)
+        #     precDil[inMask] = precArr[inMask]
         
 
-        precDil += 1e-5
+        precArr += 1e-5
         mask = ndi.binary_erosion(mask,structure=structuring_element,iterations=2)
        
         self.mask = mask
         np.save ('mask.npy',self.mask)
-        self.prec.fill(precDil)
+        self.prec.fill(precArr)
        # self.prec.write('prec.hv')
        #
-        self.precArr = np.sqrt(1/precDil)
-        self.prec.fill(self.precArr)
+        self.precArr = np.sqrt(1/precArr)
+    #    self.prec.fill(self.precArr)
  #       self.prec.write('prec.hv')
        # self.prec.
 
         
-        self.x = self.x.get_uniform_copy(0)
-        self.immArr = self.x.as_array()
+   #     self.x = self.x.get_uniform_copy(0)
+   #     self.immArr = self.x.as_array()
         self.sDirSTIR = self.x.get_uniform_copy(0)
         self.prevGrad =self.x.get_uniform_copy(0)
         self.prevSDir = self.x.get_uniform_copy(0)
-        self.ybar = self.addCorrThr.clone()
+  #      self.ybar = self.addCorrThr.clone()
         self.makeFFT_2D_filter()
         super().__init__()
         self.configured = True       
@@ -166,22 +162,23 @@ class Submission (Algorithm):
                     if (xs == 0) and (ys==0) and (zs==0): 
               #          print('continuing')
                         continue
+ 
                     shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))
                     sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
                     if zs==-1:
                         shiftImm_[-1,:,:]= inpImm_[-1,:,:]
                     if zs==1:
                         shiftImm_[0,:,:] = inpImm_[0,:,:]
-
+    
                     tempW = pixS_[1]*kappa_*sk_ / np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)             
-                    rdpG_ += tempW*(inpImm_ - shiftImm_)*(inpImm_ + 3 * shiftImm_ + 2* eps_ + 2* np.abs(inpImm_-shiftImm_)) \
-                    /(np.abs(inpImm_)+ np.abs(shiftImm_) + 2*np.abs(inpImm_-shiftImm_ )+eps_)** 2 
-                    
+                    rdpG_ += tempW*(inpImm_ - shiftImm_)*(2*eps_**2 + 6* shiftImm_**2 -7*shiftImm_*inpImm_ + 5*inpImm_**2) \
+                    /(5*shiftImm_**2 -8*shiftImm_*inpImm_+5*inpImm_**2 +eps_**2 )**(3/2)
+    
         rdpG_ *= beta_
-        return rdpG_
+        return rdpG_                    
     
     def makeFFT_2D_filter (self):
-        d_ = .8
+        d_ = 1.01
         imShape_ = self.x.shape
         tRes_ = 0
         # find TOF res
@@ -219,8 +216,8 @@ class Submission (Algorithm):
         
         # Apply the shepp-logan window
         fV = 2*np.pi*(np.arange(1,freqN+1))/order
-    #    ftFilt[1:] *= (np.sin(fV/(2*d_)) / (fV/(2*d_)))
-        ftFilt[1:] *= ((.54 + .46*np.cos(fV/d_))*(fV<(np.pi*d_)))
+        ftFilt[1:] *= (np.sin(fV/(2*d_)) / (fV/(2*d_)))
+  #      ftFilt[1:] *= ((.54 + .46*np.cos(fV/d_))*(fV<(np.pi*d_)))
         
         
         ftFilt[ftFilt<0]=0
@@ -229,7 +226,7 @@ class Submission (Algorithm):
         xf = np.arange(0,order//2+1).reshape((1,order//2+1))
         yf = xf.transpose()
         freqR = np.sqrt(xf**2+yf**2)
-        interpF = np.interp(freqR,nFreq,ftFilt,right=0) #ftFilt[-1])
+        interpF = np.interp(freqR,nFreq,ftFilt,right=ftFilt[-1])
  #       if (imShape_[1]%2):
  #           interpF = np.concatenate([interpF,interpF[-1:0:-1,:]],axis=0)
  #           interpF = np.concatenate([interpF,interpF[:,-1:0:-1]],axis=1)
@@ -246,10 +243,9 @@ class Submission (Algorithm):
  
     
     def rdp_hess_diag (self):
-        inpImm_ = ndi.gaussian_filter(self.x.as_array(),1.3)
-    #    kappa_ = ndi.gaussian_filter(self.kappaArr,1.1)
         kappa_ = self.kappaArr
-        rdpG_ = np.zeros_like(inpImm_)
+        inpImm_ = self.x.as_array()
+        rdpG_ = np.zeros_like(kappa_)
         eps_ = self.data.prior.get_epsilon()
         beta_ = self.data.prior.get_penalisation_factor()
         pixS_ = self.x.voxel_sizes()        
@@ -265,13 +261,25 @@ class Submission (Algorithm):
                     if zs==-1:
                         shiftImm_[-1,:,:]= inpImm_[-1,:,:]
                     if zs==1:
-                        shiftImm_[0,:,:] = inpImm_[0,:,:]     
-                    rdpG_ += (eDist*2)*(kappa_*sk_)*(eps_ +2 * shiftImm_)**2 /(inpImm_+ shiftImm_ + 2*np.abs(inpImm_-shiftImm_ )+eps_)** 3 
-                    
+                        shiftImm_[0,:,:] = inpImm_[0,:,:]    
+                        
+                    tempW = kappa_*sk_ / np.sqrt(xs**2+ys**2+zs**2)   
+                    tI = (
+                        -7*(shiftImm_*inpImm_)**2
+                        -5*eps_**2 * inpImm_**2
+                        + 22*inpImm_*shiftImm_**3
+                        +14*eps_**2 * inpImm_*shiftImm_
+                        -7*shiftImm_**4
+                        -eps_**2*shiftImm_**2
+                        +2*eps_**4
+                    )
+                        
+                    rdpG_ += tempW*tI/(5*inpImm_**2-8*inpImm_*shiftImm_+5*shiftImm_**2+eps_**2)**(5/2)
+               
         rdpG_ *= beta_
-        rdpG_ = ndi.gaussian_filter(rdpG_,0.6)
         return rdpG_
-
+        
+     
     
     def rdp_den_exact (self,sDir_,alpha_=0):
               
@@ -289,29 +297,45 @@ class Submission (Algorithm):
                 for zs in range(-1,2):
                     if (xs == 0) and (ys==0) and (zs==0): 
                         continue
+ 
                     eDist = pixS_[1]/ np.sqrt((zs*pixS_[0])**2+(xs*pixS_[1])**2+(ys*pixS_[2])**2)
                     shiftImm_ = np.roll(inpImm_,(zs,xs,ys),axis=(0,1,2))                         
                     sk_ = np.roll(kappa_,(zs,xs,ys),axis=(0,1,2))
                     shiftSI_ = np.roll(sDir_,(zs,xs,ys),axis=(0,1,2))                
-
-                    if zs==-1:
-                        shiftImm_[-1,:,:]= inpImm_[-1,:,:]
-                        shiftSI_[-1,:,:] = sDir_[-1,:,:]
-                    if zs==1:
-                        shiftImm_[0,:,:] = inpImm_[0,:,:]
-                        shiftSI_[0,:,:] = sDir_[0,:,:]
-                    wI = 1/(np.abs(inpImm_)+ np.abs(shiftImm_) + 2 * np.abs(inpImm_-shiftImm_) + eps_)**3
-                    wI *= (kappa_*sk_ )
-                    wI *= ((2*shiftImm_+eps_)**2 *  sDir_**2 -(2*inpImm_+eps_)*(2*shiftImm_+eps_)*sDir_*shiftSI_)
-                    
+                    tW = (kappa_*sk_)*eDist
+                    wI = tW/(5*inpImm_**2+5*shiftImm_**2-8*inpImm_*shiftImm_+eps_**2)**(5/2)
+                    diagT = sDir_**2 * ( 2*eps_**4-eps_**2*(5*inpImm_**2-14*inpImm_*shiftImm_+shiftImm_**2)+shiftImm_**2*(22*inpImm_*shiftImm_-7*inpImm_**2-7*shiftImm_**2))
+                    offDiagT = sDir_*shiftSI_ * ( -2*eps_**4+2*eps_**2*(inpImm_**2-6*inpImm_*shiftImm_+shiftImm_**2)-shiftImm_*inpImm_*(22*inpImm_*shiftImm_-7*inpImm_**2-7*shiftImm_**2))
+                    wI *= (diagT+offDiagT)
                     ssDen += np.sum(np.sum(np.sum(wI,axis=-1),axis=-1),axis=-1)
-        ssDen *= (2*beta_)
+        ssDen *= (beta_)
         return ssDen       
 
+    def rdp_den_2 (self,inpImm_,sDir_,eps_,beta_,alpha_=0):
+        ssDen = 0
+        kappa_ = self.kappa
+        inpImm_ +=alpha_*sDir_
+        for xs in range(-1,2):
+            for ys in range (-1,2):
+                    if (xs==0) and (ys==0):
+                        continue
+                    eDist = 1/ np.sqrt(xs**2+ys**2)
+                    shiftImm_ = np.roll(inpImm_,(xs,ys),axis=(0,1))                         
+                    sk_ = np.roll(kappa_,(xs,ys),axis=(0,1))
+                    shiftSI_ = np.roll(sDir_,(xs,ys),axis=(0,1))                
+                    tW = (kappa_*sk_)*eDist
+                    wI = tW/(5*inpImm_**2+5*shiftImm_**2-8*inpImm_*shiftImm_+eps_**2)**(5/2)
+                    diagT = sDir_**2 * ( 2*eps_**4-eps_**2*(5*inpImm_**2-14*inpImm_*shiftImm_+shiftImm_**2)+shiftImm_**2*(22*inpImm_*shiftImm_-7*inpImm_**2-7*shiftImm_**2))
+                    offDiagT = sDir_*shiftSI_ * ( -2*eps_**4+2*eps_**2*(inpImm_**2-6*inpImm_*shiftImm_+shiftImm_**2)-shiftImm_*inpImm_*(22*inpImm_*shiftImm_-7*inpImm_**2-7*shiftImm_**2))
+                    wI *= (diagT+offDiagT)
+                    ssDen += np.sum(np.sum(wI,axis=-1),axis=-1)
+        ssDen *= (beta_)
+        return ssDen 
+    
     
     def update(self):
 
-        capFact = 2.5/(5+(self.iteration/20)**2)
+        capFact = 1 # 2.5/(5+(self.iteration/20)**2)
         gradNum = self.data.acquired_data-self.ybar
         gradDen = self.ybar.maximum(self.addCorrThr*capFact)
         grad = self.full_model.backward(gradNum/gradDen)
@@ -320,62 +344,39 @@ class Submission (Algorithm):
         grad.fill(gradArr)
         
         sDir = gradArr*self.precArr #grad.as_array()*self.precArr
-       # if (self.iteration>0):
-            #            sDir = ndi.gaussian_filter(sDir,(0.4,0,0))
-          #  sDir = np.fft.fft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2))
-          #  print ('ftSDIR shape' +  str(sDir.shape))
-         #   sDir *= self.FFTFilter
-         #   print ('ft Filter' +  str(self.FFTFilter.shape))
-        #    sDir = np.real(np.fft.ifft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2)))
-       #     sDir = sDir[:,:self.immArr.shape[1],:self.immArr.shape[2]]
-          #  print ('inv FT shape' +  str(sDir.shape))
+      #   if (self.iteration>0):
+      #       sDir = ndi.gaussian_filter(sDir,(0.4,0,0))
+      #       sDir = np.fft.fft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2))
+      # #     print ('ftSDIR shape' +  str(sDir.shape))
+      #       sDir *= self.FFTFilter
+      # #     print ('ft Filter' +  str(self.FFTFilter.shape))
+      #       sDir = np.real(np.fft.ifft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2)))
+      #       sDir = sDir[:,:self.immArr.shape[1],:self.immArr.shape[2]]
+      #     #  print ('inv FT shape' +  str(sDir.shape))
         sDir *= self.precArr
         
-        if (self.iteration<1):
-            sDir = ndi.gaussian_filter(sDir,1)
+        # if (self.iteration<1):
+        #     sDir = ndi.gaussian_filter(sDir,1)
         sDir *= self.mask
         self.sDirSTIR.fill(sDir)
 
-        if (self.iteration>1):
-            beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
-            beta = max(0,beta)
-            beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
-            self.sDirSTIR.sapyb(1,self.prevSDir,beta,out=self.sDirSTIR)
+        # if (self.iteration>1):
+        #      beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
+        #      beta = max(0,beta)
+        # #     beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
+        #      self.sDirSTIR.sapyb(1,self.prevSDir,beta,out=self.sDirSTIR)
         self.prevSDir = self.sDirSTIR.clone()
         self.prevGrad = grad.clone()
         sDir = self.sDirSTIR.as_array()
         
         fpSD = self.lin_model.forward(self.sDirSTIR)
-        tomoDenC = fpSD.dot(fpSD/self.ybar.maximum(self.addCorrThr*capFact))
+        tomoDenC = fpSD.dot(fpSD/gradDen)
         numNew = self.sDirSTIR.dot(grad)
         newDenRDP = self.rdp_den_exact(self.sDirSTIR.as_array())
         
         inSS = numNew/(tomoDenC+newDenRDP)
         print('\n numNew{:.2e} tomoDen{:.2e} newRDP {:.2e} inSS {:.2e}'.format(numNew,tomoDenC,newDenRDP,inSS))
-        if (self.iteration==0):
-            for ssIdx in range(4):
-                yBarIt = self.ybar.sapyb(1,fpSD,inSS)
-                newNum = fpSD.dot((-yBarIt+self.data.acquired_data)/yBarIt)
-                newDen = fpSD.dot(fpSD/yBarIt.maximum(self.addCorrThr*capFact))
-                inSS += newNum/newDen
-                print(f'num loop: {newNum:.2e} denLoop {newDen:.2e} ss {inSS:.2e}')
-        else:
-            ybarNP = self.ybar.get_subset(self.ssAng).as_array()
-            addNP = self.addSS
-            #addNP = self.addCorrThr.get_subset(self.ssAng).as_array()
-            dataNP = self.dataNP #self.data.acquired_data.get_subset(self.ssAng).as_array()
-            fpNP = fpSD.get_subset(self.ssAng).as_array()
-            for ssIdx in range(5):
-                yBarIt = ybarNP+inSS*fpNP # self.ybar.sapyb(1,fpSD,inSS)
-                yBarDen = np.maximum(yBarIt,addNP)
-                newNum =  np.dot(fpNP.flat,((-yBarIt+dataNP)/yBarDen).flat) #fpSD.dot((-yBarIt+self.data.acquired_data)/yBarIt.maximum(self.addCorrThr*capFact))
-                newNum *= self.subFactor
-                newNumRDP = -np.dot(sDir.flat,self.rdp_grad(alpha_=inSS,sDir_=sDir).flat)
-                newDen = np.dot(fpNP.flat,(fpNP/yBarDen).flat) #fpSD.dot(fpSD/yBarIt.maximum(self.addCorrThr*capFact))
-                newDen *= self.subFactor
-                newDenRDP = self.rdp_den_exact(sDir,alpha_=inSS)
-                inSS += (newNum+newNumRDP)/(newDen+newDenRDP)
-                print(f'num loop={newNum:.2e} numRDP={newNumRDP:.2e} denLoop={newDen:.2e} denRDP={newDenRDP:.2e} ss={inSS:.2e}')               
+          
             
         self.x.sapyb(1,self.sDirSTIR,inSS,out=self.x) 
         self.ybar.sapyb(1,fpSD,inSS,out=self.ybar)

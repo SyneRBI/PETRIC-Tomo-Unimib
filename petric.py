@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/newSS_sPrec_diag_PR")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/diagPPsm_inSm07_Plain")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -71,7 +71,7 @@ class SaveIters(Callback):
         if not self.skip_iteration(algo):
             log.debug("saving iter %d...", algo.iteration)
             algo.x.write(str(self.outdir / f'iter_{algo.iteration:04d}.hv'))
-            algo.sDirSTIR.write(str(self.outdir / f'sDir_{algo.iteration:04d}.hv'))
+     #       algo.sDirSTIR.write(str(self.outdir / f'sDir_{algo.iteration:04d}.hv'))
             #algo.maskStir.write(str(self.outdir / f'mask.hv'))
             self.csv.writerow((algo.iteration, algo.get_last_loss()))
             log.debug("...saved")
@@ -149,7 +149,7 @@ class QualityMetrics(ImageQualityCallback, Callback):
 
 class MetricsWithTimeout(cil_callbacks.Callback):
     """Stops the algorithm after `seconds`"""
-    def __init__(self, seconds=300, outdir=OUTDIR, transverse_slice=None, coronal_slice=None, **kwargs):
+    def __init__(self, seconds=600, outdir=OUTDIR, transverse_slice=None, coronal_slice=None, **kwargs):
         super().__init__(**kwargs)
         self._seconds = seconds
         self.callbacks = [
@@ -255,11 +255,11 @@ if SRCDIR.is_dir():
                          (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
                          [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
                          (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
-                          [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")])] #,
-                        # (SRCDIR / "Mediso_NEMA_IQ", OUTDIR / "Mediso_IQ",
-                        #[MetricsWithTimeout(outdir=OUTDIR / "Mediso_IQ")]),
-                         #(SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
-                         # [MetricsWithTimeout(outdir=OUTDIR / "IQ_lowcounts")]),
+                         [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
+                         (SRCDIR / "Mediso_NEMA_IQ", OUTDIR / "Mediso_IQ",
+                        [MetricsWithTimeout(outdir=OUTDIR / "Mediso_IQ")]),
+                         (SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
+                         [MetricsWithTimeout(outdir=OUTDIR / "IQ_lowcounts")])] #,
                          #(SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
                          #[MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")])]
 else:
