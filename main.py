@@ -49,23 +49,7 @@ class Submission (Algorithm):
         
         print('set up log lik')
         
-        nAngles = data.acquired_data.dimensions()[2]
-        nSSAng = 22
-        self.subFactor = nAngles/nSSAng
-        usedAngles = [(x*nAngles)//nAngles for x in range(nSSAng)] #, nAngles//3, (nAngles)//2, (2*nAngles)//3, (5*nAngles)//6 ]
-        self.ssAng = usedAngles
-        
-        acqModSS = STIR.AcquisitionModelUsingParallelproj()
-        acqModSS.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors.get_subset(usedAngles)))
-        acqModSS.set_additive_term(data.additive_term.get_subset(usedAngles))
-        #self.addSS = data.additive_term.get_subset(usedAngles).as_array()*(data.mult_factors.get_subset(usedAngles).as_array())
-        self.addSS = self.addCorrThr.get_subset(usedAngles).as_array()
-        self.dataNP = self.data.acquired_data.get_subset(usedAngles).as_array()
-    #    print('about to set up acqModSS')
-        acqModSS.set_up(data.acquired_data.get_subset(usedAngles),self.x)
-    #    print('set up acqMod SS')
-        self.acqModSS = acqModSS
-      
+     
         ybar = acq_model.forward(self.x)
         self.prec = self.x.get_uniform_copy(0)
         
@@ -101,9 +85,9 @@ class Submission (Algorithm):
         kappa.fill(newKarr)
         self.data.prior.set_kappa(kappa)
         self.data.prior.set_up(self.x)
-        self.ll = STIR.make_Poisson_loglikelihood(data.acquired_data,acq_model=acq_model)
+  #      self.ll = STIR.make_Poisson_loglikelihood(data.acquired_data,acq_model=acq_model)
   #      self.ll.set_prior(self.data.prior)
-        self.ll.set_up(self.x)
+  #      self.ll.set_up(self.x)
     #    print('set new k')
        
         precArr = self.precTomo
@@ -180,7 +164,7 @@ class Submission (Algorithm):
     def makeFFT_2D_filter (self):
         d_ = 1.01
         imShape_ = self.x.shape
-        tRes_ = 0
+        tRes_ = 900
         # find TOF res
         dataInfo = self.data.acquired_data.get_info().splitlines()
         tofLine = [line for line in dataInfo if 'TOF timing' in line]
@@ -216,8 +200,8 @@ class Submission (Algorithm):
         
         # Apply the shepp-logan window
         fV = 2*np.pi*(np.arange(1,freqN+1))/order
-        ftFilt[1:] *= (np.sin(fV/(2*d_)) / (fV/(2*d_)))
-  #      ftFilt[1:] *= ((.54 + .46*np.cos(fV/d_))*(fV<(np.pi*d_)))
+#        ftFilt[1:] *= (np.sin(fV/(2*d_)) / (fV/(2*d_)))
+        ftFilt[1:] *= ((.54 + .46*np.cos(fV/d_))*(fV<(np.pi*d_)))
         
         
         ftFilt[ftFilt<0]=0
@@ -307,6 +291,7 @@ class Submission (Algorithm):
                     diagT = sDir_**2 * ( 2*eps_**4-eps_**2*(5*inpImm_**2-14*inpImm_*shiftImm_+shiftImm_**2)+shiftImm_**2*(22*inpImm_*shiftImm_-7*inpImm_**2-7*shiftImm_**2))
                     offDiagT = sDir_*shiftSI_ * ( -2*eps_**4+2*eps_**2*(inpImm_**2-6*inpImm_*shiftImm_+shiftImm_**2)-shiftImm_*inpImm_*(22*inpImm_*shiftImm_-7*inpImm_**2-7*shiftImm_**2))
                     wI *= (diagT+offDiagT)
+                    wI[wI<0]=0
                     ssDen += np.sum(np.sum(np.sum(wI,axis=-1),axis=-1),axis=-1)
         ssDen *= (beta_)
         return ssDen       
@@ -339,46 +324,51 @@ class Submission (Algorithm):
         gradNum = self.data.acquired_data-self.ybar
         gradDen = self.ybar.maximum(self.addCorrThr*capFact)
         grad = self.full_model.backward(gradNum/gradDen)
+      # grad = self.full_model.backward(gradNum/self.ybar)
         gradPrior = self.rdp_grad()
         gradArr = grad.as_array()-gradPrior
         grad.fill(gradArr)
         
         sDir = gradArr*self.precArr #grad.as_array()*self.precArr
-      #   if (self.iteration>0):
-      #       sDir = ndi.gaussian_filter(sDir,(0.4,0,0))
-      #       sDir = np.fft.fft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2))
-      # #     print ('ftSDIR shape' +  str(sDir.shape))
-      #       sDir *= self.FFTFilter
-      # #     print ('ft Filter' +  str(self.FFTFilter.shape))
-      #       sDir = np.real(np.fft.ifft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2)))
-      #       sDir = sDir[:,:self.immArr.shape[1],:self.immArr.shape[2]]
+  #     #   if (self.iteration>0):
+  
+        sDir = np.fft.fft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2))
+    #   print ('ftSDIR shape' +  str(sDir.shape))
+        sDir *= self.FFTFilter
+  #     print ('ft Filter' +  str(self.FFTFilter.shape))
+        sDir = np.real(np.fft.ifft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2)))
+        sDir = sDir[:,:self.immArr.shape[1],:self.immArr.shape[2]]
       #     #  print ('inv FT shape' +  str(sDir.shape))
         sDir *= self.precArr
-        
+        sDir = ndi.gaussian_filter(sDir,(0.6,0,0))
         # if (self.iteration<1):
         #     sDir = ndi.gaussian_filter(sDir,1)
         sDir *= self.mask
         self.sDirSTIR.fill(sDir)
 
-        # if (self.iteration>1):
-        #      beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
-        #      beta = max(0,beta)
-        # #     beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
-        #      self.sDirSTIR.sapyb(1,self.prevSDir,beta,out=self.sDirSTIR)
+        # if (self.iteration>0):
+             # beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
+             # beta = max(0,beta)
+            # beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
+             # self.sDirSTIR.sapyb(1,self.prevSDir,beta,out=self.sDirSTIR)
         self.prevSDir = self.sDirSTIR.clone()
         self.prevGrad = grad.clone()
         sDir = self.sDirSTIR.as_array()
         
         fpSD = self.lin_model.forward(self.sDirSTIR)
         tomoDenC = fpSD.dot(fpSD/gradDen)
+       #tomoDenC = fpSD.dot(fpSD/self.ybar)
         numNew = self.sDirSTIR.dot(grad)
         newDenRDP = self.rdp_den_exact(self.sDirSTIR.as_array())
         
         inSS = numNew/(tomoDenC+newDenRDP)
         print('\n numNew{:.2e} tomoDen{:.2e} newRDP {:.2e} inSS {:.2e}'.format(numNew,tomoDenC,newDenRDP,inSS))
           
+          
             
         self.x.sapyb(1,self.sDirSTIR,inSS,out=self.x) 
+     #   self.x = self.x.maximum(0)
+     #   self.full_model.forward(self.x,out=self.ybar)
         self.ybar.sapyb(1,fpSD,inSS,out=self.ybar)
         self.immArr = self.x.as_array()
 
