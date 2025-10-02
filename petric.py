@@ -35,7 +35,7 @@ from img_quality_cil_stir import ImageQualityCallback
 log = logging.getLogger('petric')
 TEAM = os.getenv("GITHUB_REPOSITORY", "SyneRBI/PETRIC-").split("/PETRIC-", 1)[-1]
 VERSION = os.getenv("GITHUB_REF_NAME", "")
-OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/filtTOFPPsm_inSm07_Plain_ssHP")
+OUTDIR = Path(f"/o/logs/{TEAM}/{VERSION}" if TEAM and VERSION else "./output/BSREM_paper")
 if not (SRCDIR := Path("/mnt/share/petric")).is_dir():
     SRCDIR = Path("./data")
 
@@ -66,8 +66,9 @@ class SaveIters(Callback):
 
     def __call__(self, algo: Algorithm):
         if algo.iteration==0:
-            algo.data.prior.get_kappa().write(str(self.outdir / 'myKappa.hv'))
-            algo.prec.write(str(self.outdir/'myPrec.hv'))
+            pass
+#            algo.data.prior.get_kappa().write(str(self.outdir / 'myKappa.hv'))
+ #           algo.prec.write(str(self.outdir/'myPrec.hv'))
         if not self.skip_iteration(algo):
             log.debug("saving iter %d...", algo.iteration)
             algo.x.write(str(self.outdir / f'iter_{algo.iteration:04d}.hv'))
@@ -77,6 +78,8 @@ class SaveIters(Callback):
             log.debug("...saved")
         if algo.iteration == algo.max_iteration:
             algo.x.write(str(self.outdir / 'iter_final.hv'))
+            ssV = np.array(algo.ssL)
+            np.save(str(self.outdir/'stepSize_array.npy'),ssV)
 
 
 class StatsLog(Callback):
@@ -149,7 +152,7 @@ class QualityMetrics(ImageQualityCallback, Callback):
 
 class MetricsWithTimeout(cil_callbacks.Callback):
     """Stops the algorithm after `seconds`"""
-    def __init__(self, seconds=900, outdir=OUTDIR, transverse_slice=None, coronal_slice=None, **kwargs):
+    def __init__(self, seconds=2400, outdir=OUTDIR, transverse_slice=None, coronal_slice=None, **kwargs):
         super().__init__(**kwargs)
         self._seconds = seconds
         self.callbacks = [
@@ -224,6 +227,9 @@ def get_data(srcdir=".", outdir=OUTDIR, sirf_verbosity=0):
     additive_term = STIR.AcquisitionData(str(srcdir / 'additive_term.hs'))
     mult_factors = STIR.AcquisitionData(str(srcdir / 'mult_factors.hs'))
     OSEM_image = STIR.ImageData(str(srcdir / 'OSEM_image.hv'))
+  #  OSEM_image = STIR.ImageData(str(srcdir / 'PETRIC/reference_image.hv'))
+ #   OSEM_image = STIR.ImageData(str(srcdir / 'PETRIC/ref_new.hv'))
+  #  OSEM_image = STIR.ImageData('output/test_BSREM/Vision600_Hoffman/iter_0660.hv')
     kappa = STIR.ImageData(str(srcdir / 'kappa.hv'))
     if (penalty_strength_file := (srcdir / 'penalisation_factor.txt')).is_file():
         penalty_strength = float(np.loadtxt(penalty_strength_file))
@@ -250,18 +256,20 @@ def get_data(srcdir=".", outdir=OUTDIR, sirf_verbosity=0):
 if SRCDIR.is_dir():
     # create list of existing data
     # NB: `MetricsWithTimeout` initialises `SaveIters` which creates `outdir`
-    data_dirs_metrics = [ (SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
-                         [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")]) #,
-                        # (SRCDIR / "Siemens_mMR_NEMA_IQ", OUTDIR / "mMR_NEMA",
-                         # [MetricsWithTimeout(outdir=OUTDIR / "mMR_NEMA", transverse_slice=72, coronal_slice=109)]),
-                         # (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
-                         # [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)]),
-                         # (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",
-                         # [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
-                        # (SRCDIR / "Mediso_NEMA_IQ", OUTDIR / "Mediso_IQ",
-                        # [MetricsWithTimeout(outdir=OUTDIR / "Mediso_IQ")]),
-                         # (SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
-                         # [MetricsWithTimeout(outdir=OUTDIR / "IQ_lowcounts")])
+    data_dirs_metrics = [#(SRCDIR / "Siemens_Vision600_thorax", OUTDIR / "Vision600_thorax",
+                        # [MetricsWithTimeout(outdir=OUTDIR / "Vision600_thorax")]) ,
+                        #(SRCDIR / "Siemens_Vision600_Hoffman", OUTDIR / "Vision600_Hoffman",
+                        #  [MetricsWithTimeout(outdir=OUTDIR / "Vision600_Hoffman")])                        
+                     #    (SRCDIR / "Siemens_mMR_NEMA_IQ", OUTDIR / "mMR_NEMA",
+                     #    [MetricsWithTimeout(outdir=OUTDIR / "mMR_NEMA", transverse_slice=72, coronal_slice=109)]),
+                         (SRCDIR / "NeuroLF_Hoffman_Dataset", OUTDIR / "NeuroLF_Hoffman",
+                         [MetricsWithTimeout(outdir=OUTDIR / "NeuroLF_Hoffman", transverse_slice=72)])
+                     #    (SRCDIR / "Siemens_mMR_ACR", OUTDIR / "mMR_ACR",                       
+                    #     [MetricsWithTimeout(outdir=OUTDIR / "mMR_ACR")]),
+                    #     (SRCDIR / "Mediso_NEMA_IQ", OUTDIR / "Mediso_IQ",
+                    #     [MetricsWithTimeout(outdir=OUTDIR / "Mediso_IQ")]),
+                    #      (SRCDIR / "Siemens_mMR_NEMA_IQ_lowcounts", OUTDIR / "IQ_lowcounts",
+                     #     [MetricsWithTimeout(outdir=OUTDIR / "IQ_lowcounts")])
                          ]
 else:
     log.warning("Source directory does not exist: %s", SRCDIR)
@@ -281,6 +289,7 @@ else:
     from docopt import docopt
     args = docopt(__doc__)
     logging.basicConfig(level=getattr(logging, args["--log"].upper()))
+    #from main_mine import Submission, submission_callbacks
     from main import Submission, submission_callbacks
     assert issubclass(Submission, Algorithm)
     for srcdir, outdir, metrics in data_dirs_metrics:

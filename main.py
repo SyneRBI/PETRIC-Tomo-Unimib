@@ -24,12 +24,14 @@ class Submission (Algorithm):
     
     
     '''
-    def __init__(self, data, **kwargs):
+    def __init__(self, data, circulant=True,Conjugate=True, **kwargs):
 
+        self.ConjFlag = Conjugate #flag to store whether to apply conjugate gradient
+        self.CirculantFlag = circulant #flat to store whether to use _also_ the circulant part of the preconditioner
         self.x = data.OSEM_image
+        self.ssL = [] # List to store computed step sizes, debugging purposes
         tImmArr = self.x.as_array()
         tImmArrSm = ndi.gaussian_filter(tImmArr,0.7)
-        
         self.x.fill(tImmArrSm)
         self.immArr = self.x.as_array()
         epsCorr = data.additive_term.max()*1e-6
@@ -39,25 +41,17 @@ class Submission (Algorithm):
         acq_model = STIR.AcquisitionModelUsingParallelproj()
         acq_model.set_acquisition_sensitivity(STIR.AcquisitionSensitivityModel(data.mult_factors))
         acq_model.set_additive_term(data.additive_term)
-    #    print('about to set up acq_mod')
         acq_model.set_up(data.acquired_data, self.x)
-    #    print('acq_mod')
         self.full_model = acq_model
         self.lin_model = acq_model.get_linear_acquisition_model()
         self.addCorrThr = data.additive_term*data.mult_factors
         self.addCorrThr +=epsCorr
         
-        print('set up log lik')
-        
-     
         ybar = acq_model.forward(self.x)
         self.prec = self.x.get_uniform_copy(0)
         
-        #fp1 = self.lin_model.forward(self.x.get_uniform_copy(1))
-#        self.precTomo = acq_model.backward(self.data.mult_factors/ybar).as_array()*self.x.dimensions()[1]
         self.ybar = ybar
-        self.precTomo = acq_model.backward(self.data.mult_factors/ybar).as_array()
-#        self.precTomo = acq_model.backward(fp1/ybar).as_array()
+        self.precTomo = acq_model.backward(self.data.mult_factors/self.ybar.maximum(self.addCorrThr)).as_array()
         newKappa = acq_model.backward(ybar.get_uniform_copy(1))
         newKarr = newKappa.as_array()
         newKprof = np.mean(np.mean(newKarr,axis=2),axis=1)
@@ -76,59 +70,35 @@ class Submission (Algorithm):
         newKarr *=100
         newKarr *=700
         newKarr = np.sqrt(newKarr)
-        print ('beta Fact='+ str(self.data.prior.get_penalisation_factor())) 
-
-
         kappa = self.data.prior.get_kappa()
         self.kappaArr = newKarr
-    #    print('done second bp')
         kappa.fill(newKarr)
         self.data.prior.set_kappa(kappa)
         self.data.prior.set_up(self.x)
-  #      self.ll = STIR.make_Poisson_loglikelihood(data.acquired_data,acq_model=acq_model)
-  #      self.ll.set_prior(self.data.prior)
-  #      self.ll.set_up(self.x)
-    #    print('set new k')
        
         precArr = self.precTomo
         mask = (precArr>1)
         rdpPrec = self.rdp_hess_diag()
         rdpPrec[rdpPrec<0]=0
         rdpPrec = ndi.gaussian_filter(rdpPrec,(0,1,1))
-        precArr +=  rdpPrec#self.rdp_hess_diag()
-        # precArr = ndi.gaussian_filter(precArr,(0.4,1.2,1.2))
+        precArr +=  rdpPrec
         
         structuring_element = np.array([[0, 1, 0],
                           [1, 1, 1],
                           [0, 1, 0]]).astype(bool)
         structuring_element = structuring_element.reshape((1,3,3))  
         inMask = ndi.binary_erosion(mask,structure=structuring_element)
-        # precDil = precArr.copy()                        
-        # for _ in range(22):
-        #     precDil = ndi.grey_dilation(precDil,structure=structuring_element)
-        #     precDil[inMask] = precArr[inMask]
-        
 
         precArr += 1e-5
         mask = ndi.binary_erosion(mask,structure=structuring_element,iterations=2)
        
         self.mask = mask
         np.save ('mask.npy',self.mask)
-        self.prec.fill(precArr)
-       # self.prec.write('prec.hv')
-       #
+        self.prec.fill(mask/(precArr+1e-6))
         self.precArr = np.sqrt(1/precArr)
-    #    self.prec.fill(self.precArr)
- #       self.prec.write('prec.hv')
-       # self.prec.
-
-        
-   #     self.x = self.x.get_uniform_copy(0)
-   #     self.immArr = self.x.as_array()
         self.sDirSTIR = self.x.get_uniform_copy(0)
         self.prevGrad =self.x.get_uniform_copy(0)
         self.prevSDir = self.x.get_uniform_copy(0)
-  #      self.ybar = self.addCorrThr.clone()
         self.makeFFT_2D_filter()
         super().__init__()
         self.configured = True       
@@ -175,8 +145,6 @@ class Submission (Algorithm):
         
         order = 2*np.power(2,np.ceil(np.log2(imShape_[1]))).astype(np.uint32)
         self.filtOrd = order
-       # freqN = np.power(2,np.ceil(np.log2(imShape_[1]//2))).astype(np.uint32)
-      #  print (order)
         freqN = order//2
         nFreq = np.arange(0,freqN +1)
         filtImpResp = np.zeros((len(nFreq),))
@@ -197,12 +165,10 @@ class Submission (Algorithm):
         
         # with oder 2x I have many more frequencies than I need.
         
-        
         # Apply the shepp-logan window
         fV = 2*np.pi*(np.arange(1,freqN+1))/order
 #        ftFilt[1:] *= (np.sin(fV/(2*d_)) / (fV/(2*d_)))
         ftFilt[1:] *= ((.54 + .46*np.cos(fV/d_))*(fV<(np.pi*d_)))
-        
         
         ftFilt[ftFilt<0]=0
 
@@ -211,19 +177,11 @@ class Submission (Algorithm):
         yf = xf.transpose()
         freqR = np.sqrt(xf**2+yf**2)
         interpF = np.interp(freqR,nFreq,ftFilt,right=ftFilt[-1])
- #       if (imShape_[1]%2):
- #           interpF = np.concatenate([interpF,interpF[-1:0:-1,:]],axis=0)
- #           interpF = np.concatenate([interpF,interpF[:,-1:0:-1]],axis=1)
- #           interpF = interpF.reshape((1,)+imShape_[1:])            
- #       else:
         interpF = np.concatenate([interpF,interpF[-2:0:-1,:]],axis=0)
         interpF = np.concatenate([interpF,interpF[:,-2:0:-1]],axis=1)
-        interpF = interpF.reshape((1,order,order))
-        #interpF = interpF.reshape((1,)+imShape_[1:])
-        
+        interpF = interpF.reshape((1,order,order))     
         self.FFTFilter = interpF
-      #  self.invFilt = 1/interpF
-      #  self.invFilt /= self.invFilt[0,0,0]
+
  
     
     def rdp_hess_diag (self):
@@ -269,7 +227,6 @@ class Submission (Algorithm):
               
         ssDen = 0
         inpImm_ = self.immArr+alpha_*sDir_
-   #     inpImm_[inpImm_<0]=0
         kappa_ = self.kappaArr
 
         eps_ = self.data.prior.get_epsilon()
@@ -295,86 +252,56 @@ class Submission (Algorithm):
                     ssDen += np.sum(np.sum(np.sum(wI,axis=-1),axis=-1),axis=-1)
         ssDen *= (beta_)
         return ssDen       
-
-    def rdp_den_2 (self,inpImm_,sDir_,eps_,beta_,alpha_=0):
-        ssDen = 0
-        kappa_ = self.kappa
-        inpImm_ +=alpha_*sDir_
-        for xs in range(-1,2):
-            for ys in range (-1,2):
-                    if (xs==0) and (ys==0):
-                        continue
-                    eDist = 1/ np.sqrt(xs**2+ys**2)
-                    shiftImm_ = np.roll(inpImm_,(xs,ys),axis=(0,1))                         
-                    sk_ = np.roll(kappa_,(xs,ys),axis=(0,1))
-                    shiftSI_ = np.roll(sDir_,(xs,ys),axis=(0,1))                
-                    tW = (kappa_*sk_)*eDist
-                    wI = tW/(5*inpImm_**2+5*shiftImm_**2-8*inpImm_*shiftImm_+eps_**2)**(5/2)
-                    diagT = sDir_**2 * ( 2*eps_**4-eps_**2*(5*inpImm_**2-14*inpImm_*shiftImm_+shiftImm_**2)+shiftImm_**2*(22*inpImm_*shiftImm_-7*inpImm_**2-7*shiftImm_**2))
-                    offDiagT = sDir_*shiftSI_ * ( -2*eps_**4+2*eps_**2*(inpImm_**2-6*inpImm_*shiftImm_+shiftImm_**2)-shiftImm_*inpImm_*(22*inpImm_*shiftImm_-7*inpImm_**2-7*shiftImm_**2))
-                    wI *= (diagT+offDiagT)
-                    ssDen += np.sum(np.sum(wI,axis=-1),axis=-1)
-        ssDen *= (beta_)
-        return ssDen 
-    
+  
     
     def update(self):
 
-        capFact = 1 # 2.5/(5+(self.iteration/20)**2)
+        capFact = 1 
         gradNum = self.data.acquired_data-self.ybar
-        gradDen = self.ybar.maximum(self.addCorrThr*capFact)
+        gradDen = self.ybar.maximum(self.addCorrThr)
+        
         grad = self.full_model.backward(gradNum/gradDen)
-      # grad = self.full_model.backward(gradNum/self.ybar)
         gradPrior = self.rdp_grad()
         gradArr = grad.as_array()-gradPrior
         grad.fill(gradArr)
+        sDir = gradArr*self.precArr 
         
-        sDir = gradArr*self.precArr #grad.as_array()*self.precArr
-  #     #   if (self.iteration>0):
-  
-        sDir = np.fft.fft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2))
-    #   print ('ftSDIR shape' +  str(sDir.shape))
-        sDir *= self.FFTFilter
-  #     print ('ft Filter' +  str(self.FFTFilter.shape))
-        sDir = np.real(np.fft.ifft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2)))
-        sDir = sDir[:,:self.immArr.shape[1],:self.immArr.shape[2]]
-      #     #  print ('inv FT shape' +  str(sDir.shape))
+        if self.CirculantFlag:
+            sDir = np.fft.fft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2))
+            sDir *= self.FFTFilter
+            sDir = np.real(np.fft.ifft2(sDir,s=(self.filtOrd,self.filtOrd),axes=(1,2)))
+            sDir = sDir[:,:self.immArr.shape[1],:self.immArr.shape[2]]
+            sDir = ndi.gaussian_filter(sDir,(0.6,0,0))
         sDir *= self.precArr
-        sDir = ndi.gaussian_filter(sDir,(0.6,0,0))
-        # if (self.iteration<1):
-        #     sDir = ndi.gaussian_filter(sDir,1)
         sDir *= self.mask
         self.sDirSTIR.fill(sDir)
-
-        # if (self.iteration>0):
-             # beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
-             # beta = max(0,beta)
-            # beta2 = self.sDirSTIR.dot(grad)/(self.prevSDir.dot(self.prevGrad))
-             # self.sDirSTIR.sapyb(1,self.prevSDir,beta,out=self.sDirSTIR)
+        
+        if self.ConjFlag:
+            if (self.iteration>0):
+              beta = (self.sDirSTIR.dot(grad)-self.sDirSTIR.dot(self.prevGrad))/(self.prevSDir.dot(self.prevGrad))
+              beta = max(0,beta)
+              self.sDirSTIR.sapyb(1,self.prevSDir,beta,out=self.sDirSTIR)
         self.prevSDir = self.sDirSTIR.clone()
         self.prevGrad = grad.clone()
         sDir = self.sDirSTIR.as_array()
         
         fpSD = self.lin_model.forward(self.sDirSTIR)
         tomoDenC = fpSD.dot(fpSD/gradDen)
-       #tomoDenC = fpSD.dot(fpSD/self.ybar)
         numNew = self.sDirSTIR.dot(grad)
         newDenRDP = self.rdp_den_exact(self.sDirSTIR.as_array())
         
         inSS = numNew/(tomoDenC+newDenRDP)
-        print('\n numNew{:.2e} tomoDen{:.2e} newRDP {:.2e} inSS {:.2e}'.format(numNew,tomoDenC,newDenRDP,inSS))
-          
-          
-            
+       
+ #       print('\n numNew{:.2e} tomoDen{:.2e} newRDP {:.2e} inSS {:.2e}'.format(numNew,tomoDenC,newDenRDP,inSS))
+                   
         self.x.sapyb(1,self.sDirSTIR,inSS,out=self.x) 
-     #   self.x = self.x.maximum(0)
-     #   self.full_model.forward(self.x,out=self.ybar)
         self.ybar.sapyb(1,fpSD,inSS,out=self.ybar)
+        self.ssL.append(inSS)
         self.immArr = self.x.as_array()
 
         
     def update_objective(self):
         return 0
-        
-         #   ssTomo = ssNum/ssDen
-submission_callbacks = [MaxIteration(660)]
+
+
+submission_callbacks = [MaxIteration(6600)]

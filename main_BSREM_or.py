@@ -42,10 +42,13 @@ class Submission(BSREM1):
                                                                     data.mult_factors, num_subsets,
                                                                     initial_image=data.OSEM_image)
         # WARNING: modifies prior strength with 1/num_subsets (as currently needed for BSREM implementations)
+        print('prior strenghts is:{:.1e}'.format(data.prior.get_penalisation_factor()))
         data.prior.set_penalisation_factor(data.prior.get_penalisation_factor() / len(obj_funs))
         data.prior.set_up(data.OSEM_image)
         for f in obj_funs: # add prior evenly to every objective function
             f.set_prior(data.prior)
+        print('prior set in loop')
+        print('type of f is' + str(type(f)))
 
         super().__init__(data_sub, obj_funs, initial=data.OSEM_image, initial_step_size=.3, relaxation_eta=.01,
                          update_objective_interval=update_objective_interval)
